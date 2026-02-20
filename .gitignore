@@ -1,0 +1,7 @@
+# common workspace folders
+__pycache__
+.vscode
+
+# standard data folders for this repo
+output/
+storage/

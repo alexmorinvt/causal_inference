@@ -1,0 +1,3 @@
+[submodule "causalbench"]
+	path = causalbench
+	url = https://github.com/causalbench/causalbench.git
