@@ -17,7 +17,11 @@ limitations under the License.
 
 import json
 import os
+import sys
 import time
+
+# Use submodule causalscbench, not pip-installed package
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "causalbench"))
 
 import pandas as pd
 import slingpy as sp
@@ -31,12 +35,14 @@ from causalscbench.data_access.utils.splitting import DatasetSplitter
 from causalscbench.evaluation import (biological_evaluation,
                                       statistical_evaluation)
 from causalscbench.models import training_regimes
-from causalscbench.models.random_network import RandomWithSize
+from causalscbench.models.random_network import RandomWithSize, FullyConnected
 from causalscbench.models.arboreto_baselines import GRNBoost
 
 from datetime import datetime
 
 from src.RandomModel import RandomModel
+from src.MeanDifference import MeanDifference
+from src.DataSaverModel import DataSaverModel
 
 DATASET_NAMES = [
     "weissmann_k562",
@@ -46,7 +52,11 @@ DATASET_NAMES = [
 METHODS = [
     "random",
     "random100",
+    "fully_connected",
     "grnboost",
+    "mean_difference",
+    "data_saver",
+    "custom",
 ]
 
 
@@ -67,6 +77,7 @@ class MainApp:
         max_path_length: int = -1,
         omission_estimation_size: int = 0,
         filter: bool = False,
+        eval_false_negatives: bool = True,
     ):
         """
         Main full training pipeline.
@@ -84,7 +95,8 @@ class MainApp:
             subset_data (float, optional): Option to subset the whole dataset for easier training. Defaults to 1.0.
             exp_id (str, optional): Unique experiment id (6 digit number). Default to randomly generated.
             max_path_length (int, optional): Maximum length of path to consider for statistical evaluation. Default to -1 (all paths).
-            omission_estimation_size (int, optional): Number of negative samples to draw to estimate the false omission rate. If 0, the FOR is not checked. 
+            omission_estimation_size (int, optional): Number of negative samples to draw to estimate the false omission rate. If 0, the FOR is not checked.
+            eval_false_negatives (bool, optional): Whether to compute false negatives (slow ~1M mannwhitneyu tests). Default to True.
         """
         exp_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
@@ -103,6 +115,7 @@ class MainApp:
         self.filter = filter
         self.omission_estimation_size = omission_estimation_size
         self.check_false_omission_rate = omission_estimation_size > 0
+        self.eval_false_negatives = eval_false_negatives
         self.model = None
         self.dataset_splitter = None
         self.corum_evaluator = None
@@ -116,16 +129,19 @@ class MainApp:
         models_dict = {
             "random": RandomModel(),
             "random100": RandomWithSize(100),
-            "grnboost": GRNBoost()
+            "fully_connected": FullyConnected(),
+            "grnboost": GRNBoost(),
+            "mean_difference": MeanDifference(),
+            "data_saver": DataSaverModel(),
         }
-        if self.model_name not in METHODS:
-            raise NotImplementedError()
         if self.model_name == "custom":
             self.model = get_if_valid_custom_function_file(
                 self.inference_function_file_path
             )()
-        else:
+        elif self.model_name in models_dict:
             self.model = models_dict[self.model_name]
+        else:
+            raise NotImplementedError(f"Unknown model: {self.model_name}")
 
     def load_data(self):
         path_k562, path_rpe1 = CreateDataset(self.data_directory, self.filter).load()
@@ -218,6 +234,7 @@ class MainApp:
             "max_path_length": self.max_path_length,
             "omission_estimation_size": self.omission_estimation_size,
             "filter": self.filter,
+            "eval_false_negatives": self.eval_false_negatives,
         }
         with open(os.path.join(self.output_directory, "arguments.json"), "w") as output:
             json.dump(arguments, output)
@@ -249,7 +266,8 @@ class MainApp:
         )
         pooled_biological_sigificant_evaluation = self.pooled_biological_significant_evaluator.evaluate_network(output_network, directed=True)
         quantitative_test_evaluation = self.quantitative_evaluator.evaluate_network(
-            output_network, self.max_path_length, self.check_false_omission_rate, self.omission_estimation_size
+            output_network, self.max_path_length, self.check_false_omission_rate,
+            self.omission_estimation_size, eval_false_negatives=self.eval_false_negatives
         )
         logging.info("Model evaluation finished.")
         metrics = {

@@ -6,3 +6,4 @@ dependencies:
   - pip
   - pip:
     - causalbench==1.1.2
+    - pgmpy==0.1.25

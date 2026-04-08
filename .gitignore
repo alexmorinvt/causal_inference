@@ -5,3 +5,4 @@ __pycache__
 # standard data folders for this repo
 output/
 storage/
+manual_data/
