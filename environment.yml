@@ -1,9 +1,0 @@
-name: causal_inference
-channels:
-  - defaults
-dependencies:
-  - python=3.8
-  - pip
-  - pip:
-    - causalbench==1.1.2
-    - pgmpy==0.1.25
