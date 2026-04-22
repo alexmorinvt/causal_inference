@@ -1,5 +1,6 @@
 name: grn-inference
 channels:
+  - pytorch
   - conda-forge
 dependencies:
   - python=3.11
@@ -9,6 +10,12 @@ dependencies:
   - scipy>=1.10
   - scikit-learn>=1.3
   - pandas>=2.0
+
+  # --- Autograd for the ensemble-SCM fitter ---
+  # Used only as a differentiable-tensor library (torch.linalg.solve,
+  # torch.autograd.grad). Not as a machine-learning framework.
+  - pytorch
+  - cpuonly
 
   # --- Dev tools ---
   - pytest>=7.0
@@ -26,14 +33,8 @@ dependencies:
       - -e .
 
 # -------------------------------------------------------------------------
-# Adding Stage 1 (simulation-based model) later:
-#
-#   conda install -n grn-inference -c pytorch -c conda-forge \
-#       pytorch cpuonly
-#   conda run -n grn-inference pip install geomloss
-#
-# When you move to GPU, replace `pytorch cpuonly` with `pytorch pytorch-cuda=12.1`
-# and add the `nvidia` channel. The pytorch install selector at
+# GPU later: replace `pytorch cpuonly` with `pytorch pytorch-cuda=12.1` and
+# add the `nvidia` channel. The pytorch install selector at
 # https://pytorch.org/get-started/locally/ generates the exact command for
 # your platform.
 #

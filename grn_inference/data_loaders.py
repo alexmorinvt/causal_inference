@@ -60,6 +60,7 @@ def make_synthetic_dataset(
     n_cells_per_perturbation: int = 200,
     knockdown_factor: float = 0.3,
     noise_std: float = 1.0,
+    n_perturbed_genes: int | None = None,
     seed: int = 0,
 ) -> tuple[Dataset, SyntheticTruth]:
     """Generate a Dataset from a known linear cyclic SCM.
@@ -104,6 +105,14 @@ def make_synthetic_dataset(
     noise_std
         Gaussian noise standard deviation. Same across genes for
         simplicity.
+    n_perturbed_genes
+        If ``None`` (default), every gene gets an intervention arm —
+        matching the original behaviour. Otherwise, a random subset of
+        this many genes is selected; only those genes have intervention
+        arms, and edges whose source is unperturbed will be invisible
+        to the statistical metric. Useful for testing methods that are
+        supposed to leverage observational data to pick up
+        unperturbed-source edges.
     seed
         RNG seed.
 
@@ -137,10 +146,22 @@ def make_synthetic_dataset(
     interventions: list[str] = [CONTROL_LABEL] * n_control_cells
     all_expr = [x_ctrl]
 
+    # ---- Decide which genes get intervention arms ----------------------
+    if n_perturbed_genes is None:
+        perturbed_indices = list(range(n_genes))
+    else:
+        if not 0 < n_perturbed_genes <= n_genes:
+            raise ValueError(
+                f"n_perturbed_genes must be in (0, {n_genes}]; got {n_perturbed_genes}"
+            )
+        perturbed_indices = sorted(
+            rng.choice(n_genes, size=n_perturbed_genes, replace=False).tolist()
+        )
+
     # ---- Interventional cells ------------------------------------------
     # For gene t: zero row t of W (t no longer regulated by its parents),
     # replace epsilon_t with a knockdown-specific noise.
-    for t in range(n_genes):
+    for t in perturbed_indices:
         W_t = W.copy()
         W_t[t, :] = 0.0
         inv_t = np.linalg.inv(I - W_t)
