@@ -1,8 +1,22 @@
-# common workspace folders
-__pycache__
-.vscode
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+.venv/
+venv/
+.env
 
-# standard data folders for this repo
-output/
-storage/
-manual_data/
+# CausalBench cache — can be multi-GB
+data_cache/
+outputs/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store

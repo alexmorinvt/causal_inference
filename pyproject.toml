@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "grn_inference"
+version = "0.0.1"
+description = "Gene regulatory network inference via simulation-based learning on CausalBench."
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "scikit-learn>=1.3",
+    "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "ruff",
+]
+# Install these when you're ready to plug in the real CausalBench data.
+# `causalbench` pulls in a large dep tree; keep it optional so Stage 0 stays light.
+causalbench = [
+    "causalbench",
+]
+# Install these when you move to Stage 1 (the simulation-based model).
+torch = [
+    "torch>=2.0",
+    "geomloss>=0.2.6",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["grn_inference*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
