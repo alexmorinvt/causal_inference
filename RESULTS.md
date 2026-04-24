@@ -28,10 +28,10 @@ Sanity floor: mean W1 on evaluable edges must not drop below `RandomBaseline`'s 
 | MeanDifferenceModel | 0.2571  | 0.000 | 0.131       | 0.000                | 0.01s        |
 | RandomBaseline      | 0.2309  | 0.357 | 0.118       | 0.000                | 0.08s        |
 
-### Current best (on train) — the bar iteration 6 must beat
+### Current best (on train) — the bar iteration 7 must beat
 
-- **precision@k**: `NeighborhoodRegressionModel` w/ reverse-shift damping + within-arm correlation boost at **0.146** (was 0.142 iter 2, 0.138 iter 1, 0.128 from MD).
-- **hidden-source recall**: `NeighborhoodRegressionModel` w/ reverse-shift damping at **0.401** (was 0.367 plain NR).
+- **precision@k**: `NeighborhoodRegressionModel` w/ reverse-shift damping + within-arm correlation boost + β-asymmetry direction filter at **0.155** (was 0.146 iter 5, 0.142 iter 2, 0.138 iter 1, 0.128 MD).
+- **hidden-source recall**: same method at **0.467** (was 0.401 iter 5, 0.367 iter 1).
 - W1 sanity floor: must stay above `RandomBaseline`'s 0.2457.
 
 ## Iteration log
@@ -153,3 +153,24 @@ Unperturbed bucket unchanged.
 Precision +2.8% train / +1.3% test. Hidden-source recall **unchanged** on both splits by construction — the boost only acts on the perturbed bucket, whose edges have zero hidden-source count. Mean W1 is essentially unchanged (the W1 average is over evaluable perturbed-source edges; re-ordering within the top 500 perturbed-source predictions doesn't change which edges are evaluable). Runtime negligible.
 
 **Verdict**: **KEPT**. Strict reading of "beat both metrics on train" tolerates a tie on hidden recall here — the modification can't move that metric by construction, and precision clearly improves on both splits without regressing anything else.
+
+### Iteration 6 — β-asymmetry direction filter on unperturbed-unperturbed pairs
+
+**Hypothesis**: for a pair of unperturbed genes `(A, B)`, both directions `(A, B)` and `(B, A)` currently appear in the unperturbed bucket scored by `|β[B,A]|` and `|β[A,B]|` respectively. Under a generic no-two-cycle sparsity prior, at most one of these is real, so ranking both wastes slots.
+
+**Theoretical basis**: with isotropic noise `Σ_ε = σ² I`, `β[B,A] = −Θ[A,B]/Θ[B,B]` and `β[A,B] = −Θ[A,B]/Θ[A,A]`. Numerators are equal (Θ is symmetric); denominators differ: `Θ[i,i] = (1 + Σ_k W[k,i]²)/σ²` — larger for genes with more downstream children. So `|β[B,A]| > |β[A,B]|` iff `A has more children than B`, which is the hallmark of a source node. The larger-|β| direction points **away from** the more-connected gene, which is the causal-source candidate. Keep only that direction; zero the weaker.
+
+**Change**: added `direction_from_beta_asymmetry: bool = True`. Only applies to unperturbed-unperturbed pairs (for S unperturbed, T perturbed, the reverse-shift damping from iter 2 already handles direction). No effect on the perturbed bucket.
+
+**Numbers (top_k=1000)**:
+
+| split | method | mean W1 | FOR | precision@k | hidden recall | runtime/seed |
+|-------|--------|---------|-----|-------------|---------------|--------------|
+| train (0,1,2) | NR + β-asymmetry filter | 0.3836 | 0.034 | **0.155** | **0.467** | 0.01s |
+| train (0,1,2) | NR (iter 5, prev best) | 0.3836 | 0.037 | 0.146 | 0.401 | 0.02s |
+| test (100,101,102) | NR + β-asymmetry filter | 0.3560 | 0.019 | **0.163** | **0.460** | 0.01s |
+| test (100,101,102) | NR (iter 5) | 0.3560 | 0.023 | 0.159 | 0.432 | 0.01s |
+
+Train: precision +6.2%, hidden recall +16.6%. Test: precision +2.5%, hidden recall +6.5%. Every seed × metric improves; no regression. Runtime unchanged.
+
+**Verdict**: **KEPT**. Largest single-iteration jump on hidden recall so far (0.40 → 0.47 on train, 0.43 → 0.46 on test). The β-asymmetry direction signal is a genuine identifiability result in the isotropic-noise linear SCM, so this is a principled gain rather than a tuning artefact.

@@ -117,6 +117,20 @@ class NeighborhoodRegressionModel:
         Cascade shortcuts ``S -> M -> T`` attenuate this coupling
         because ``M`` adds fresh noise between the endpoints.
         ``0.0`` recovers plain MD shift for the perturbed bucket.
+    direction_from_beta_asymmetry
+        If ``True``, for each unperturbed-unperturbed pair ``(A, B)``,
+        zero out the weaker-``|β|`` direction. Rationale: with
+        isotropic noise ``Σ_ε = σ² I``,
+        ``β[B, A] / β[A, B] = Θ[A, A] / Θ[B, B]``; the precision
+        diagonal ``Θ[i, i] = (1 + Σ_k W[k, i]²)/σ²`` is larger for
+        genes with more downstream children. So the larger-|β|
+        direction is from the gene with more children — the natural
+        source candidate — and the opposite direction is the
+        reverse-edge hypothesis. Under a generic no-two-cycle
+        assumption, at most one of ``(A, B)`` and ``(B, A)`` is a real
+        edge, so keeping only the β-stronger direction sacrifices no
+        precision on true edges while removing half the wrong-direction
+        candidates from the ranking pool.
     """
 
     top_k: int = 1000
@@ -124,6 +138,7 @@ class NeighborhoodRegressionModel:
     ridge_lambda: float = 1e-4
     reverse_shift_damping: bool = True
     within_arm_corr_weight: float = 1.0
+    direction_from_beta_asymmetry: bool = True
 
     def fit_predict(self, data: Dataset) -> list[Edge]:
         ctrl_mask = data.control_mask()
@@ -224,6 +239,18 @@ class NeighborhoodRegressionModel:
                         pert_scores.append((sc, s, t))
                 else:
                     sc = float(beta_score[s, t])
+                    # For unperturbed-unperturbed pairs, optionally keep
+                    # only the direction whose |β| is larger (the β-
+                    # asymmetry argument: the gene with more downstream
+                    # children has larger Θ_ii and drives the larger β
+                    # away from itself, marking it as the source).
+                    if (
+                        sc > 0.0
+                        and self.direction_from_beta_asymmetry
+                        and not pert_mask[t]
+                        and beta_score[s, t] < beta_score[t, s]
+                    ):
+                        sc = 0.0
                     # Apply reverse-shift damping only when the target
                     # is perturbed (we have shift[t, s] to evaluate);
                     # when t is unperturbed, shift[t, :] is all zeros
