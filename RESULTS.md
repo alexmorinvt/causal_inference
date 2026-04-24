@@ -241,3 +241,20 @@ Train: precision +3.2%, hidden recall +50.4%. Test: precision −2.6%, hidden re
 The FOR jump (0.034 → 0.205 train) reflects the larger unperturbed bucket predicting more small-coefficient edges that happen to pass the Mann-Whitney test against control — these contribute to FOR because they're "non-predicted edges that look significant" from the evaluator's sampling-based perspective. That's a reported-for-context metric, not a headline, and the primary headline gains are substantial.
 
 **Verdict**: **KEPT**. Largest jump in hidden recall so far (+24 pp on train, +19 pp on test). Precision gains on train; minor test-precision regression is within the skill's 10%-of-train tolerance. Purely a hyperparameter tune — no code-path change beyond the default.
+
+### Iteration 9 — replace shift-damper with within-arm correlation damper (reverted)
+
+**Hypothesis**: the iter-2 damper `exp(-shift[T,S]/scale)` damps `(S, T)` whenever `T` is *any* causal ancestor of `S` (direct or indirect). Under `forbid_two_cycles` only a *direct* reverse edge `T → S` blocks `S → T`; an indirect `T → M → S` cascade does not. Within-arm correlation `|corr(x_T, x_S | do(T))|` filters cascade from direct — cascades attenuate per-cell coupling because `M` injects noise between the endpoints. So `exp(-|corr_do_T(T, S)|)` should be a more selective damper.
+
+**Change**: swap the damping factor from shift-based to corr-based; force within-arm correlation computation on whenever `reverse_shift_damping=True`.
+
+**Numbers (top_k=1000, train)**:
+
+| method | precision@k | hidden recall |
+|--------|------------:|--------------:|
+| NR + corr-damper (iter 9) | 0.154 | 0.662 |
+| NR + shift-damper (iter 8, prev best) | 0.160 | 0.703 |
+
+Both metrics regress: precision −3.8%, hidden recall −5.9%. The theoretical case for corr-damping is right in the limit of many cells per arm, but at 200 cells per intervention arm the within-arm correlation is noise-dominated and fails to cleanly separate direct-reverse from cascade-reverse. Population-level shift is more reliable here because it aggregates across all intervention cells.
+
+**Verdict**: **REVERTED**. The corr-damper is the theoretically cleaner tool but empirically loses to shift at typical Perturb-seq-scale arm sizes. May be worth revisiting at larger `n_cells_per_perturbation` or on CausalBench where arms are bigger.
