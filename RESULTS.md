@@ -258,3 +258,22 @@ The FOR jump (0.034 → 0.205 train) reflects the larger unperturbed bucket pred
 Both metrics regress: precision −3.8%, hidden recall −5.9%. The theoretical case for corr-damping is right in the limit of many cells per arm, but at 200 cells per intervention arm the within-arm correlation is noise-dominated and fails to cleanly separate direct-reverse from cascade-reverse. Population-level shift is more reliable here because it aggregates across all intervention cells.
 
 **Verdict**: **REVERTED**. The corr-damper is the theoretically cleaner tool but empirically loses to shift at typical Perturb-seq-scale arm sizes. May be worth revisiting at larger `n_cells_per_perturbation` or on CausalBench where arms are bigger.
+
+### Iteration 10 — β-corroboration factor on the perturbed bucket (reverted, tie)
+
+**Hypothesis**: the perturbed bucket score uses interventional evidence only (shift + within-arm corr); β is already computed for the unperturbed bucket and sits unused for these pairs. For a true direct edge `S → T`, both interventional shift and observational β should be elevated; for cascade shifts, β conditions on intermediates and stays small. Adding `(1 + w_β · |β|)` as a third multiplicative factor should filter cascade false positives.
+
+**Train sweep** (seeds 0, 1, 2):
+
+| `beta_corroboration_weight` | precision@k | hidden recall |
+|----------------------------:|------------:|--------------:|
+| 0.00 (iter 8) | 0.1600 | 0.7033 |
+| 0.25 | 0.1597 | 0.7033 |
+| 0.50 | 0.1597 | 0.7033 |
+| 1.00 | 0.1597 | 0.7033 |
+| 2.00 | 0.1600 | 0.7033 |
+| 5.00 | 0.1587 | 0.7033 |
+
+β-corroboration is essentially inert at w ∈ [0.25, 2.0] (tie) and regresses at w=5. The top-250 perturbed-source edges by `shift * (1 + w_corr·|corr|)` are already well-separated from the rest; adding β as a third factor doesn't reshuffle the top-250 membership.
+
+**Verdict**: **REVERTED** (tie). β-corroboration is a principled idea but the perturbed-bucket top is already saturated by interventional evidence on this benchmark. May bite on noisier or more cascade-prone data.
