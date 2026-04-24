@@ -36,6 +36,7 @@ from scipy.stats import wasserstein_distance
 from grn_inference import (
     MeanDifferenceModel,
     NeighborhoodRegressionModel,
+    PathInversionModel,
     RandomBaseline,
     evaluate_statistical,
     make_synthetic_dataset,
@@ -54,6 +55,7 @@ def build_methods(top_k: int, fit_seed: int = 0):
         "NeighborhoodRegressionModel": lambda: NeighborhoodRegressionModel(
             top_k=top_k,
         ),
+        "PathInversionModel": lambda: PathInversionModel(top_k=top_k),
     }
 
 

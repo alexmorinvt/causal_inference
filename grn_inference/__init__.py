@@ -11,6 +11,7 @@ from .evaluator import StatisticalResult, evaluate_statistical
 from .indirect_pruning import IndirectPruningModel
 from .models import MeanDifferenceModel, Model, RandomBaseline
 from .neighborhood_regression import NeighborhoodRegressionModel
+from .path_inversion import PathInversionModel
 from .shift_corr import ShiftCorrModel
 from .shift_paths import ShiftPathsModel
 
@@ -22,6 +23,7 @@ __all__ = [
     "MeanDifferenceModel",
     "Model",
     "NeighborhoodRegressionModel",
+    "PathInversionModel",
     "RandomBaseline",
     "ShiftCorrModel",
     "ShiftPathsModel",

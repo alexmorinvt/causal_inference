@@ -362,3 +362,31 @@ Peak at `w=20`; saturates past 50. Picked 20 for the smaller-magnitude principle
 All four deltas positive: train +1.4%/+2.5%, test +1.7%/+2.9%. Test numbers within 10% of train (precision gap 0.8%, hidden gap 8.3%).
 
 **Verdict**: **KEPT**. The IV regression uses perturbed genes as natural instruments for upstream (unperturbed) sources — theoretically principled under linear SCM cascades, and empirically the iter-12 saturation was worth pivoting through.
+
+### Iteration 14 — PathInversionModel (new graph-theoretic family)
+
+**Hypothesis**: pivot to a completely different estimator family based on graph-theoretic path decomposition. In a linear SCM ``x = Wx + ε``, the total-effect matrix ``T`` with ``T[i, j] = shift[j, i]`` approximates ``(I - W)⁻¹ W``. Rearranging, **`W = T (I + T)⁻¹`**. The Neumann series `(I + T)⁻¹ = I − T + T² − ...` gives `W = T − T² + T³ − T⁴ + ...`, which is **inclusion-exclusion over walk lengths** in the shift graph: start with all-paths, subtract 2-hop explanations, add back 3-hop over-subtractions, and so on until only direct edges remain.
+
+**Graph-theoretic distinctness**: no precision matrix (NR), no simulation (EnsembleSCM), no explicit pruning (IndirectPruning), no path enumeration (ShiftPaths). A single matrix inversion on the total-effect matrix.
+
+**Change**: new module `grn_inference/path_inversion/` with `PathInversionModel`. For perturbed source genes `T[:, j]` comes directly from the shift column; for unperturbed sources we impute `T[:, j]` from the rescaled control-cell correlation matrix (a crude proxy — the observational correlation is undirected, so the imputation carries the observational-only direction ambiguity). Spectral projection keeps `ρ(T) < spectral_target = 0.8` so `(I + T)⁻¹` is well-defined. `W_est = T (I + T + ridge·I)⁻¹`; rank edges by `|W_est|`.
+
+**Numbers (top_k=1000)**:
+
+| split | method | mean W1 | FOR | precision@k | hidden recall | runtime/seed |
+|-------|--------|---------|-----|-------------|---------------|--------------|
+| train (0,1,2) | PathInversionModel | 0.367 | 0.119 | 0.137 | 0.391 | 0.01s |
+| train (0,1,2) | MeanDifferenceModel (baseline) | 0.274 | 0.000 | 0.128 | 0.000 | 0.01s |
+| train (0,1,2) | NeighborhoodRegressionModel (iter 13, current best) | 0.489 | 0.200 | 0.164 | 0.736 | 0.02s |
+| test (100,101,102) | PathInversionModel | 0.335 | 0.115 | 0.153 | 0.445 | 0.01s |
+| test (100,101,102) | MeanDifferenceModel | 0.257 | 0.000 | 0.131 | 0.000 | 0.01s |
+| test (100,101,102) | NeighborhoodRegressionModel | 0.454 | 0.167 | 0.163 | 0.675 | 0.02s |
+
+Train sweep over `(spectral_target, obs_correlation_weight)` ∈ {0.3..0.95} × {0, 0.5, 1, 2}: best precision is 0.142 at (0.3, 2.0); best hidden recall is 0.54 at (0.3, 2.0). At principled defaults (0.8, 1.0): 0.137 / 0.391.
+
+**Verdict**: **EXPLORATORY — CODE KEPT, ITER-14 NOT RECORD**. PathInversionModel clearly beats both baselines (MD: +7% prec, +40 pp hidden; Random: +18% prec, new capability) but does **not** beat `NeighborhoodRegressionModel` (iter 13, current best). The method is distinct enough to be worth keeping in the tree as a second estimator family for future iteration; tuning or extending it (better imputation of unperturbed columns, regularised inversion, residualisation) may close the gap with NR. Current best on the branch remains iter 13's NR at train 0.164 / 0.736.
+
+Observations from the numbers:
+- The perturbed-source half of `T` is directly observed and the matrix inversion cleanly de-convolves it — PI beats MD on precision because its inversion removes cascade contributions from the shift signal.
+- The unperturbed-source half comes from observational correlation, which is undirected and confounded. This is where PI loses the most ground to NR's bootstrap-averaged partial-correlation β.
+- A promising next step for the PI family: replace the observational-correlation imputation with a cleaner direction-aware signal (e.g., sign-preserving partial correlations, or interventional-arm-averaged correlations).
