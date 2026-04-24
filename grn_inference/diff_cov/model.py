@@ -93,6 +93,7 @@ class DiffCovModel:
     observational_ridge: float = 1e-4
     diff_power: float = 0.5
     unpert_pert_direction_scale: float = 0.30
+    unpert_unpert_direction_temp: float = 5.0
 
     def fit_predict(self, data: Dataset) -> list[Edge]:
         ctrl_mask = data.control_mask()
@@ -181,8 +182,13 @@ class DiffCovModel:
                         np.exp(-a / self.unpert_pert_direction_scale)
                     )
                 else:
-                    a = abs(beta_obs[i, j])
-                    b = abs(beta_obs[j, i])
+                    # Unperturbed-unperturbed: sharpen the β-ratio with
+                    # a temperature exponent. temp=1 is the plain ratio;
+                    # temp >> 1 amplifies clear asymmetries into near-1
+                    # direction weights, near-ties stay close to 0.5.
+                    t = float(self.unpert_unpert_direction_temp)
+                    a = abs(beta_obs[i, j]) ** t
+                    b = abs(beta_obs[j, i]) ** t
                     total = a + b
                     direction_weight[j, i] = a / total if total > 0.0 else 0.5
 

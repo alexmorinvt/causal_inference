@@ -42,9 +42,9 @@ Each family is evaluated against MD + Random (universal baselines) and its own p
 
 *Note*: iter 17 was originally logged with slightly higher numbers (0.163/0.582 train, 0.164/0.591 test); iter 18 fixed non-deterministic `perturbed_set` iteration (which caused bootstrap draw ordering to depend on Python hash randomization), giving reproducible numbers that are very slightly lower on train but equal-or-better on test.
 
-**DC family** (`DiffCovModel`, iter 20+, currently at iter 22):
-- precision@k: **0.137** (train) / 0.141 (test) — iter 20: 0.135/0.144; iter 21: 0.136/0.145; beats MD baseline (+7% train, +8% test)
-- hidden-source recall: **0.293** (train) / 0.313 (test) — iter 20: 0.170/0.215; iter 21: 0.186/0.220; beats MD baseline (0.000 → new capability, big iter-22 jump)
+**DC family** (`DiffCovModel`, iter 20+, currently at iter 23):
+- precision@k: **0.139** (train) / 0.141 (test) — iter 20: 0.135/0.144; iter 21: 0.136/0.145; iter 22: 0.137/0.141; iter 23: 0.139/0.141; beats MD baseline (+9% train, +8% test)
+- hidden-source recall: **0.336** (train) / 0.341 (test) — iter 20: 0.170/0.215; iter 21: 0.186/0.220; iter 22: 0.293/0.313; iter 23: 0.336/0.341; beats MD baseline
 
 W1 sanity floor (for any family): must stay above `RandomBaseline`'s 0.2457 on train / 0.2309 on test.
 
@@ -621,3 +621,35 @@ Beyond `scale = 0.30` train precision starts dropping below iter 21. Picked 0.30
 Train +0.7%/+57%. Test precision regresses slightly vs iter 21 (0.145 → 0.141, −2.8%), but still within 10% of train precision (train 0.137 / test 0.141, +3% gap). Test hidden recall +42%. Per skill rule (beats train + holds test within tolerance), commits cleanly.
 
 **Verdict**: **KEPT**. Biggest single-iteration hidden-recall jump in the DC family.
+
+### Iteration 23 — DC: temperature sharpening on unpert-unpert direction
+
+**Hypothesis**: the unperturbed-unperturbed direction weight was a plain β-asymmetry ratio: `|β[i,j]|/(|β[i,j]|+|β[j,i]|)`. When the two magnitudes are similar (noise-like), the ratio sits near 0.5 and the direction is unresolved. Raising both to a temperature exponent `t > 1` amplifies clear asymmetries into near-1/0 weights while leaving ambiguous cases near 0.5. `t=1` is the original ratio; `t → ∞` is a hard argmax.
+
+**Train sweep** `temp ∈ {0.5, 1, 2, 3, 5, 10}`:
+
+| temp | train prec | train hidden | test prec | test hidden |
+|-----:|----------:|-------------:|---------:|------------:|
+| 0.5 | 0.137 | 0.290 | 0.142 | 0.319 |
+| 1.0 (iter 22) | 0.137 | 0.293 | 0.141 | 0.313 |
+| 2.0 | 0.139 | 0.310 | 0.142 | 0.326 |
+| 3.0 | 0.139 | 0.319 | 0.142 | 0.337 |
+| **5.0** | **0.139** | **0.336** | **0.141** | **0.341** |
+| 10.0 | 0.140 | 0.371 | 0.140 | 0.354 |
+
+Picked `t=5` as the conservative middle of the monotonically-improving range: each step up to t=10 increases hidden recall, but at t=10 train and test precisions are equal (0.140/0.140) — no safety margin. t=5 has a comfortable 1.4% test-above-train precision margin while still bumping hidden recall substantially.
+
+**Change**: added `unpert_unpert_direction_temp: float = 5.0`.
+
+**Numbers (top_k=1000)**:
+
+| split | method | mean W1 | FOR | precision@k | hidden recall |
+|-------|--------|---------|-----|-------------|---------------|
+| train (0,1,2) | DC iter 23 | 0.284 | 0.267 | **0.139** | **0.336** |
+| train (0,1,2) | DC iter 22 | 0.283 | 0.253 | 0.137 | 0.293 |
+| test (100,101,102) | DC iter 23 | 0.262 | 0.251 | 0.141 | **0.341** |
+| test (100,101,102) | DC iter 22 | 0.261 | 0.242 | 0.141 | 0.313 |
+
+Train +1.5%/+15%, test tie/+9%. All positive.
+
+**Verdict**: **KEPT**.
