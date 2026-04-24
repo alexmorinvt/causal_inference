@@ -814,3 +814,18 @@ Train +4.7%/+49%, test +9.7%/+66%. All four positive, test stronger than train. 
 Train +0.5%/+2.9%, test +2.7%/+14.7%.
 
 **Verdict**: **KEPT**.
+
+### Iteration 30 — DT-family saturation checkpoint (no commit)
+
+Several DT variants tried vs iter 29; none cleared both splits.
+
+| attempt | train prec | train hidden | test prec | test hidden |
+|---------|-----------:|-------------:|----------:|------------:|
+| iter 29 baseline | 0.157 | 0.514 | 0.164 | 0.515 |
+| bootstrap (n=10, 30) | 0.152 | 0.436 | 0.159 | 0.413 |
+| IV boost on final score (w=0–50) | 0.157 | 0.514 | 0.164 | 0.515 (no-op, zero scores) |
+| unperturbed edge amp (a=1.5, 2, 3, 5) | 0.151 (best) | 0.632 (@a=2) | 0.164 | 0.637 (train prec regresses) |
+| vote weight exponent (0.5, 2, 3, 5) | 0.157 | 0.514 (no-op) | 0.164 | 0.515 |
+| median/max/q90 rescale of β_iv | 0.154 | 0.478 | 0.164 | 0.515 (train regresses) |
+
+DT family saturates at precision ~0.157, hidden ~0.515 on train. The dominator-tree core is discrete so many continuous-style tweaks are no-ops; the few that do change numbers trade precision for hidden recall without a Pareto win.
