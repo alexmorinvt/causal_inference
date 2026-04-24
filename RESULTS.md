@@ -311,3 +311,21 @@ Graphical lasso alternative was also tried and sweeps over `α ∈ {0.005, ..., 
 Train: precision +1.3%, hidden recall +2.1%. Test: precision +0.6%, hidden recall +1.7%. Gains small but consistent on both splits; test numbers within 10% of train.
 
 **Verdict**: **KEPT**.
+
+### Iteration 12 — NR-family saturation checkpoint (no commit)
+
+Several small NR extensions were tried against iter 11; none cleared both the "beats on train" and "holds on test" bars.
+
+| attempt | train precision | train hidden | verdict |
+|---------|---------------:|-------------:|---------|
+| iter 11 baseline | 0.1620 | 0.7180 | — |
+| common-children deflation (λ=0.10) | 0.1623 (+0.2%) | 0.7205 (+0.3%) | test regresses |
+| graphical lasso (best α=0.005) | 0.1587 | 0.6937 | regress |
+| neighborhood LASSO (best α=0.01) | 0.1600 | 0.7033 | regress |
+| PCA residualisation (n_pcs 1–10) | ≤ 0.1457 | ≤ 0.5977 | big regress |
+| SNR score across bootstraps | 0.1580 | 0.6882 | regress |
+| direction-vote (bootstrap majority) | 0.1617 | 0.7151 | near-tie regress |
+| hard reverse-shift threshold q=0.80 | 0.1633 (+0.8%) | 0.7285 (+1.5%) | test hidden train/test gap 10.4%, over limit |
+| hard reverse-shift threshold q=0.85 | 0.1623 | 0.7209 | noise-level |
+
+No code change committed. The NR family appears saturated on this benchmark at roughly `precision@k ≈ 0.162`, `hidden-source recall ≈ 0.72` on train. Further gains likely require a pivot to a different estimator family (moment-matching via covariance discrepancy, IV-style direction disambiguation, or score-matching on interventional densities).
