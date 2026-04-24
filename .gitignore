@@ -20,3 +20,6 @@ outputs/
 .idea/
 *.swp
 .DS_Store
+
+# Claude Code harness state
+.claude/scheduled_tasks.lock
