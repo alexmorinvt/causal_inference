@@ -42,9 +42,9 @@ Each family is evaluated against MD + Random (universal baselines) and its own p
 
 *Note*: iter 17 was originally logged with slightly higher numbers (0.163/0.582 train, 0.164/0.591 test); iter 18 fixed non-deterministic `perturbed_set` iteration (which caused bootstrap draw ordering to depend on Python hash randomization), giving reproducible numbers that are very slightly lower on train but equal-or-better on test.
 
-**DC family** (`DiffCovModel`, iter 20+, currently at iter 23):
-- precision@k: **0.139** (train) / 0.141 (test) — iter 20: 0.135/0.144; iter 21: 0.136/0.145; iter 22: 0.137/0.141; iter 23: 0.139/0.141; beats MD baseline (+9% train, +8% test)
-- hidden-source recall: **0.336** (train) / 0.341 (test) — iter 20: 0.170/0.215; iter 21: 0.186/0.220; iter 22: 0.293/0.313; iter 23: 0.336/0.341; beats MD baseline
+**DC family** (`DiffCovModel`, iter 20+, currently at iter 24):
+- precision@k: **0.140** (train) / 0.140 (test) — iter 20: 0.135/0.144; iter 21: 0.136/0.145; iter 22: 0.137/0.141; iter 23: 0.139/0.141; iter 24: 0.140/0.140; beats MD baseline (+9% train, +7% test)
+- hidden-source recall: **0.383** (train) / 0.371 (test) — iter 20–24 progression: 0.17 → 0.19 → 0.29 → 0.34 → 0.38; beats MD baseline
 
 W1 sanity floor (for any family): must stay above `RandomBaseline`'s 0.2457 on train / 0.2309 on test.
 
@@ -651,5 +651,35 @@ Picked `t=5` as the conservative middle of the monotonically-improving range: ea
 | test (100,101,102) | DC iter 22 | 0.261 | 0.242 | 0.141 | 0.313 |
 
 Train +1.5%/+15%, test tie/+9%. All positive.
+
+**Verdict**: **KEPT**.
+
+### Iteration 24 — DC: extend temperature to near-argmax (`temp=20`)
+
+**Hypothesis**: the temp sweep at iter 23 showed monotone hidden-recall improvement all the way to t=10. Extending further might still pay off if β asymmetry is a reliable direction signal.
+
+**Extended train sweep** `temp ∈ {5, 7, 8, 15, 20}`:
+
+| temp | train prec | train hidden | test prec | test hidden |
+|-----:|----------:|-------------:|---------:|------------:|
+| 5.0 (iter 23) | 0.1387 | 0.336 | 0.141 | 0.341 |
+| 7.0 | 0.1403 | 0.363 | 0.140 | 0.346 |
+| 15.0 | 0.1393 | 0.375 | 0.140 | 0.363 |
+| **20.0** | **0.1403** | **0.383** | **0.140** | **0.371** |
+
+Monotone improvement continues to t=20. Temp=20 is effectively a soft argmax on `|β|` asymmetry.
+
+**Change**: `unpert_unpert_direction_temp` 5.0 → 20.0.
+
+**Numbers (top_k=1000)** vs iter 23:
+
+| split | method | mean W1 | FOR | precision@k | hidden recall |
+|-------|--------|---------|-----|-------------|---------------|
+| train (0,1,2) | DC iter 24 | 0.284 | 0.281 | 0.140 | **0.383** |
+| train (0,1,2) | DC iter 23 | 0.284 | 0.267 | 0.139 | 0.336 |
+| test (100,101,102) | DC iter 24 | 0.265 | 0.254 | 0.140 | **0.371** |
+| test (100,101,102) | DC iter 23 | 0.262 | 0.251 | 0.141 | 0.341 |
+
+Train +1.2%/+14%, test −0.7%/+9%. Test precision regresses by 0.001 absolute but stays within 10%-of-train. Hidden recall continues to climb.
 
 **Verdict**: **KEPT**.

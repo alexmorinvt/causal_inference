@@ -93,7 +93,7 @@ class DiffCovModel:
     observational_ridge: float = 1e-4
     diff_power: float = 0.5
     unpert_pert_direction_scale: float = 0.30
-    unpert_unpert_direction_temp: float = 5.0
+    unpert_unpert_direction_temp: float = 20.0
 
     def fit_predict(self, data: Dataset) -> list[Edge]:
         ctrl_mask = data.control_mask()
