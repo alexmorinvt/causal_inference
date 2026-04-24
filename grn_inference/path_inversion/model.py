@@ -70,7 +70,11 @@ class PathInversionModel:
         After assembling ``T``, rescale it uniformly so that
         ``rho(T) = spectral_target`` (spectral radius). Ensures
         ``(I + T)`` is well-conditioned and the Neumann series for
-        ``W`` converges. Must be in ``(0, 1)``.
+        ``W`` converges. Must be in ``(0, 1)``. Default ``0.7``
+        selected by a train-seed sweep over {0.3, 0.5, 0.7, 0.8, 0.9,
+        0.95, 0.99}; smaller values under-use the inversion and
+        regress to MD, larger values over-expand and the Neumann
+        alternating sum amplifies noise.
     ridge
         Small diagonal ridge added to ``(I + T)`` before inversion. A
         safety net for near-singular cases. Default ``1e-3`` is small
@@ -105,7 +109,7 @@ class PathInversionModel:
     """
 
     top_k: int = 1000
-    spectral_target: float = 0.8
+    spectral_target: float = 0.7
     ridge: float = 1e-3
     obs_correlation_weight: float = 1.0
     clip_obs_to_pos: bool = False

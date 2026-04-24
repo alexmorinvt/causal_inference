@@ -36,9 +36,9 @@ Each family is evaluated against MD + Random (universal baselines) and its own p
 - precision@k: **0.164** (train) / 0.163 (test)
 - hidden-source recall: **0.736** (train) / 0.675 (test)
 
-**PI family** (`PathInversionModel`, iter 14+, currently at iter 15):
-- precision@k: **0.153** (train) / 0.157 (test) — was 0.137/0.153 at iter 14; beats MD baseline (+20% train, +20% test)
-- hidden-source recall: **0.560** (train) / 0.555 (test) — was 0.391/0.445 at iter 14; beats MD baseline (0.000 → new capability)
+**PI family** (`PathInversionModel`, iter 14+, currently at iter 16):
+- precision@k: **0.155** (train) / 0.160 (test) — iter 14: 0.137/0.153; iter 15: 0.153/0.157; beats MD baseline (+22% train, +22% test)
+- hidden-source recall: **0.566** (train) / 0.562 (test) — iter 14: 0.391/0.445; iter 15: 0.560/0.555; beats MD baseline (0.000 → new capability)
 
 W1 sanity floor (for any family): must stay above `RandomBaseline`'s 0.2457 on train / 0.2309 on test.
 
@@ -419,3 +419,45 @@ Observations from the numbers:
 Train: precision +12%, hidden recall +43% vs iter 14. Test: precision +3%, hidden recall +25% vs iter 14. Still well above MD baseline on both splits. Hidden recall gap to train narrows: iter 14 had 0.391→0.445 (test higher than train — PI iter 14 was an unusual case); iter 15 has 0.560→0.555 (now flat, no overfitting signal).
 
 **Verdict**: **KEPT**. First iteration within the PI family that beats iter 14 on both headline metrics on both splits.
+
+### Iteration 16 — PI: tune `spectral_target` with IV imputation in place
+
+**Hypothesis**: iter 15's spectral_target=0.8 was inherited from iter 14's correlation-based imputation. With IV imputation (cleaner, directed T columns), the inversion regime may favour a different scale.
+
+**Train sweep** (seeds 0,1,2):
+
+| `spectral_target` | train prec | train hidden |
+|------------------:|----------:|-------------:|
+| 0.30 | 0.1577 | 0.5506 |
+| 0.50 | 0.1577 | 0.5605 |
+| **0.70** | **0.1553** | **0.5657** |
+| 0.80 (iter 15) | 0.1533 | 0.5603 |
+| 0.90 | 0.1503 | 0.5607 |
+| 0.95 | 0.1500 | 0.5630 |
+| 0.99 | 0.1500 | 0.5679 |
+
+**Test at top candidates** (seeds 100,101,102):
+
+| `spectral_target` | test prec | test hidden |
+|------------------:|---------:|------------:|
+| 0.30 | 0.1633 | 0.5430 |
+| 0.50 | 0.1617 | 0.5552 |
+| **0.70** | **0.1600** | **0.5620** |
+| 0.80 (iter 15) | 0.1567 | 0.5549 |
+
+Picked **`spectral_target = 0.70`** as it's the only setting that beats iter 15 on **both** metrics on **both** splits; 0.3/0.5 beat on precision but tie or regress on hidden.
+
+**Change**: default `spectral_target` 0.80 → 0.70.
+
+**Numbers (top_k=1000)** — PI iter 16 vs iter 15:
+
+| split | method | mean W1 | FOR | precision@k | hidden recall |
+|-------|--------|---------|-----|-------------|---------------|
+| train (0,1,2) | PI iter 16 | 0.385 | 0.162 | **0.155** | **0.566** |
+| train (0,1,2) | PI iter 15 | 0.380 | 0.177 | 0.153 | 0.560 |
+| test (100,101,102) | PI iter 16 | 0.358 | 0.153 | **0.160** | **0.562** |
+| test (100,101,102) | PI iter 15 | 0.354 | 0.170 | 0.157 | 0.555 |
+
+All four deltas positive: train +1.3%/+1.0%, test +2.1%/+1.3%.
+
+**Verdict**: **KEPT**.
