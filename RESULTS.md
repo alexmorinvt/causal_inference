@@ -1004,3 +1004,33 @@ Train +4.4%/+3.2%, test +2.8%/+3.6%. All four positive. **New hidden-recall ceil
 Train precision ties (not beat), test precision regresses. ICP's lower precision pulls the ensemble down even though hidden recall is positive on both splits.
 
 **Verdict**: **REVERTED**. RA stays at iter 31's 4-estimator ensemble.
+
+### Iteration 37 — ICP-family saturation checkpoint (no commit)
+
+Tried several ICP refinements vs iter 35; none clear both splits.
+
+| attempt | train prec | train hidden | test prec | test hidden |
+|---------|-----------:|-------------:|----------:|------------:|
+| iter 35 baseline | 0.142 | 0.781 | 0.146 | 0.798 |
+| shift_boost_power fine sweep (0.3–0.7) | 0.153 (p=0.3) | 0.714 (p=0.3) | 0.152 | 0.713 | train prec up, hidden down |
+| add NR β-precision boost on unpert rows (p=0.25–2.0) | 0.154 (p=0.25) | 0.438 (p=0.25) | 0.160 | 0.443 | precision up, hidden collapses |
+
+All variants sit on the Pareto frontier — to gain precision we give up hidden recall and vice versa. ICP iter 35 is optimal for its (high-hidden, moderate-precision) slot.
+
+## Updated branch summary — 6 families, 37 iterations
+
+| family | best iter | train prec | train hidden | test prec | test hidden | identification argument |
+|--------|----------:|----------:|-------------:|---------:|------------:|---|
+| MD baseline | — | 0.128 | 0.000 | 0.131 | 0.000 | |
+| **NR** | 13 | 0.164 | 0.736 | 0.163 | 0.675 | observational precision matrix + IV |
+| **PI** | 18 | 0.160 | 0.568 | 0.165 | 0.582 | total-effect matrix inversion |
+| **DC** | 25 | 0.145 | 0.632 | 0.142 | 0.611 | intervention-sensitivity of Σ |
+| **DT** | 29 | 0.157 | 0.514 | 0.164 | 0.515 | Lengauer-Tarjan dominator tree |
+| **RA** | 31 | **0.165** | 0.634 | **0.172** | 0.650 | rank-percentile ensemble |
+| **ICP** | 35 | 0.142 | **0.781** | 0.146 | **0.798** | invariant regression across environments |
+
+Pareto frontier now:
+- **Best test precision**: RA iter 31 at 0.172
+- **Best hidden recall**: ICP iter 35 at 0.781 train / 0.798 test
+
+ICP's identifiability argument is the first on the branch that uses **environment invariance** — not observational precision, not total-effect inversion, not per-arm covariance differences. It's orthogonal to every other family.
