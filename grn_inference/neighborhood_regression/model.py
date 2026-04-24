@@ -93,11 +93,26 @@ class NeighborhoodRegressionModel:
         regression coefficients of well-observed gene pairs are
         essentially unchanged, but large enough that pathological
         near-rank-deficient directions don't blow up.
+    reverse_shift_damping
+        If ``True``, down-weight unperturbed-source candidates
+        ``(S, T)`` by ``exp(-shift[T, S] / scale)`` when ``T`` is
+        perturbed, where ``scale`` is the mean of the non-zero entries
+        of the shift matrix (data-adaptive, no free hyperparameter).
+        A large ``shift[T, S]`` is evidence that ``T`` is a causal
+        ancestor of ``S``, i.e. the reverse direction ``T -> S`` is
+        plausible; under a generic no-two-cycle assumption (which the
+        synthetic generator enforces but which is also a defensible
+        sparsity prior on real GRNs), the candidate ``S -> T`` is
+        then unlikely. When ``T`` is unperturbed we have no shift
+        information and leave the score unchanged.
+
+        Set to ``False`` to recover iteration-1 scoring exactly.
     """
 
     top_k: int = 1000
     unperturbed_fraction: float = 0.5
     ridge_lambda: float = 1e-4
+    reverse_shift_damping: bool = True
 
     def fit_predict(self, data: Dataset) -> list[Edge]:
         ctrl_mask = data.control_mask()
@@ -148,6 +163,25 @@ class NeighborhoodRegressionModel:
         for g in perturbed_set:
             pert_mask[data.gene_idx(g)] = True
 
+        # Optional direction-disambiguation multiplier: for candidate
+        # (S unperturbed, T perturbed), multiply |beta[T, S]| by
+        # exp(-shift[T, S] / scale). Scale is the mean of non-zero
+        # shift entries (data-adaptive). See the class docstring.
+        if self.reverse_shift_damping:
+            nonzero = shift[shift > 0.0]
+            if nonzero.size > 0:
+                scale = float(nonzero.mean())
+                if scale <= 0.0:
+                    scale = 1.0
+            else:
+                scale = 1.0
+            # damping[s, t] used for (src=s, tgt=t); only matters when
+            # s unperturbed and t perturbed — indexing on shift[t, s]
+            # (reverse-direction shift) is what we need.
+            damping = np.exp(-shift.T / scale).astype(np.float32)
+        else:
+            damping = None
+
         # Collect (score, src_idx, tgt_idx) per bucket.
         pert_scores = []
         unpert_scores = []
@@ -161,6 +195,12 @@ class NeighborhoodRegressionModel:
                         pert_scores.append((sc, s, t))
                 else:
                     sc = float(beta_score[s, t])
+                    # Apply reverse-shift damping only when the target
+                    # is perturbed (we have shift[t, s] to evaluate);
+                    # when t is unperturbed, shift[t, :] is all zeros
+                    # and the damping factor is 1 anyway.
+                    if sc > 0.0 and damping is not None and pert_mask[t]:
+                        sc *= float(damping[s, t])
                     if sc > 0.0:
                         unpert_scores.append((sc, s, t))
 
