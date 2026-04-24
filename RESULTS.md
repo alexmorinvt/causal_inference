@@ -113,3 +113,20 @@ Test: precision −1.9%, hidden recall −5.1% vs iter 2 — both regress.
 Ridge is essentially inactive at these scales — the covariance is well-conditioned even before regularisation — so no hyperparameter lever salvages the test regression.
 
 **Verdict**: **REVERTED**. Train gain is small; test regresses against iter 2's committed numbers. Runtime also 20× slower (0.19s vs 0.01s per seed). The interventional-cells variation in the regressors may still be useful signal, but not through naive pooling — a future iteration should route it through an instrumental-variable or weighted-regression design rather than concat-all-cells.
+
+### Iteration 4 — cross-bucket rank-percentile aggregation (reverted, tied)
+
+**Hypothesis**: the perturbed and unperturbed buckets score edges on incomparable scales (mean-shift in log1p-CPM units vs unitless regression coefficient), so the fixed 50/50 quota is arbitrary. Within each bucket, assign a rank-percentile (best = 1.0, worst = 0.0), then sort all edges by percentile and take the top `top_k`. If one bucket has a heavier right tail — meaning a few very-high-confidence edges — it naturally contributes more to the top slots. Percentile-rank is the non-parametric equivalent of a scale-matching transform and respects intra-bucket ordering without distributional assumptions.
+
+**Change**: added `aggregation: str = "rank_percentile"` with legacy `"quota"` preserved.
+
+**Numbers (top_k=1000, train seeds 0,1,2)**:
+
+| method | precision@k | hidden recall |
+|--------|------------:|--------------:|
+| NR + rank_percentile | 0.1423 | 0.4009 |
+| NR + quota (iter 2) | 0.1423 | 0.4009 |
+
+Bit-identical on every seed. At `n_genes=50, n_perturbed=25`, both buckets have 25 × 49 = 1225 candidate edges each; taking the top 1000 by rank-percentile from 2450 combined candidates lands at ~500-from-each, which equals the 50/50 quota. The aggregation change is a **no-op** on this synthetic benchmark config.
+
+**Verdict**: **REVERTED** (tie, not a win). The idea may still matter when bucket sizes differ (e.g. on CausalBench with different perturbed/unperturbed ratios, or when one bucket's score distribution is much more sharply peaked), but we have no way to validate that here. Logging so future runs don't redo it.
