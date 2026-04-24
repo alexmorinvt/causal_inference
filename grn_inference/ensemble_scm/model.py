@@ -77,6 +77,7 @@ class EnsembleSCMFitter:
     variance_weight: float = 1.0
     knockdown_factor: float = 0.3
     spectral_threshold: float | None = 0.80
+    n_cascade_steps: int = 5
     aggregation_power: float = 3.0
     weight_scale: float = 0.01
     seed: int = 0
@@ -103,6 +104,7 @@ class EnsembleSCMFitter:
             variance_weight=self.variance_weight,
             knockdown_factor=self.knockdown_factor,
             spectral_threshold=self.spectral_threshold,
+            n_cascade_steps=self.n_cascade_steps,
             seed=self.seed,
             log_every=self.log_every,
         )

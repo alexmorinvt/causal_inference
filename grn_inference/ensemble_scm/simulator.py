@@ -3,16 +3,23 @@
 Each candidate SCM is parameterised by an adjacency matrix W of shape
 ``(n_genes, n_genes)``; we hold ``n_candidates`` of them stacked into a
 single tensor of shape ``(N, G, G)`` so the whole ensemble advances
-under one matrix solve per simulation call.
+under one cascade sequence per simulation call.
 
-The observational model matches ``make_synthetic_dataset``::
+The observational model matches ``make_synthetic_dataset``'s tree
+cascade. Every cell is simulated as the leaf of a ``n_steps``-step
+dynamical recursion::
 
-    x = (I - W)^{-1} epsilon,   epsilon ~ N(0, I)
+    x_0 ~ N(0, I)
+    x_{t+1} = W @ x_t + epsilon_{t+1},   epsilon_{t+1} ~ N(0, I)
+
+Cells are independent trajectories (no shared-lineage correlations) —
+that's fine for moment matching, which only looks at per-gene marginals.
 
 An intervention on gene ``t`` zeros row ``t`` of W (``t`` no longer
-responds to its regulators) and replaces ``t``'s own noise coordinate
-with a knockdown-shifted draw — same semantics as the synthetic
-generator, so the fitted SCM is comparable against the ground-truth W.
+responds to its regulators) and replaces ``t``'s own noise coordinate,
+at every cascade step plus the initial state, with a knockdown-shifted
+draw. This mirrors the data generator's "cells are born perturbed"
+convention.
 
 PyTorch is used here purely as an autodiff library. No ``nn.Module``,
 no optimiser — just ``torch.Tensor(..., requires_grad=True)``.
@@ -64,20 +71,46 @@ class LinearSCM:
         return cls(W=W, n_genes=n_genes, n_candidates=n_candidates)
 
 
-def _solve_batch(A: torch.Tensor, eps: torch.Tensor) -> torch.Tensor:
-    """Batched solve: returns X with A @ X = eps.
+def _cascade(
+    W: torch.Tensor,
+    x: torch.Tensor,
+    n_steps: int,
+    *,
+    target_idx: int | None = None,
+    target_mean: float = 0.0,
+    target_std: float = 1.0,
+    generator: torch.Generator | None = None,
+) -> torch.Tensor:
+    """Run an ``n_steps``-step linear recursion ``x <- x @ W^T + eps``.
 
-    A: ``(N, G, G)``, eps: ``(N, G, B)`` -> ``(N, G, B)``.
+    ``W`` is ``(N, G, G)``, ``x`` is ``(N, n_cells, G)``. If
+    ``target_idx`` is given, that coordinate's noise (and not the other
+    coordinates) is drawn from ``N(target_mean, target_std^2)`` each step.
     """
-    return torch.linalg.solve(A, eps)
+    N, n_cells, G = x.shape
+    Wt = W.transpose(-2, -1)  # (N, G, G); matmul on the right operand
+    for _ in range(n_steps):
+        eps = torch.randn(
+            N, n_cells, G,
+            dtype=x.dtype, device=x.device, generator=generator,
+        )
+        if target_idx is not None:
+            kn = torch.randn(
+                N, n_cells,
+                dtype=x.dtype, device=x.device, generator=generator,
+            )
+            eps[:, :, target_idx] = target_std * kn + target_mean
+        x = torch.matmul(x, Wt) + eps
+    return x
 
 
 def simulate_control(
     scm: LinearSCM,
     n_cells: int,
     generator: torch.Generator | None = None,
+    n_steps: int = 5,
 ) -> torch.Tensor:
-    """Sample control-arm cells from every candidate SCM.
+    """Sample control-arm cells from every candidate SCM as depth-T cascade leaves.
 
     Pass a ``torch.Generator`` for deterministic noise; otherwise the
     global torch RNG is used.
@@ -85,13 +118,11 @@ def simulate_control(
     Returns tensor of shape ``(N, n_cells, G)``.
     """
     N, G = scm.n_candidates, scm.n_genes
-    I = torch.eye(G, dtype=scm.W.dtype, device=scm.W.device).expand(N, G, G)
-    eps = torch.randn(
-        N, G, n_cells,
+    x0 = torch.randn(
+        N, n_cells, G,
         dtype=scm.W.dtype, device=scm.W.device, generator=generator,
     )
-    x = _solve_batch(I - scm.W, eps)  # (N, G, n_cells)
-    return x.transpose(-1, -2).contiguous()  # (N, n_cells, G)
+    return _cascade(scm.W, x0, n_steps, generator=generator)
 
 
 def simulate_intervention(
@@ -100,14 +131,18 @@ def simulate_intervention(
     n_cells: int,
     knockdown_factor: float = 0.3,
     generator: torch.Generator | None = None,
+    n_steps: int = 5,
 ) -> torch.Tensor:
-    """Sample cells under a soft knockdown of gene ``target_idx``.
+    """Sample cells under a soft knockdown of gene ``target_idx`` via cascade.
 
-    Matches ``make_synthetic_dataset``'s intervention semantics:
+    Intervention semantics (matching ``make_synthetic_dataset`` at
+    ``alpha = 1``, i.e. a full knockdown — the fitter doesn't know the
+    true per-gene strength and uses the strongest-case approximation):
 
-    - row ``target_idx`` of W is zeroed (the target no longer responds
-      to its regulators),
-    - the target's own noise coordinate is replaced with
+    - row ``target_idx`` of W is zeroed (target no longer responds to
+      its regulators),
+    - the target's own emission (initial state and every cascade-step
+      noise draw) is replaced with
       ``knockdown_factor * N(0, 1) - (1 - knockdown_factor) * 2``.
 
     Pass a ``torch.Generator`` for deterministic noise; otherwise the
@@ -120,21 +155,25 @@ def simulate_intervention(
     # Zero row target_idx in each candidate's W without mutating scm.W.
     mask = torch.ones(G, dtype=scm.W.dtype, device=scm.W.device)
     mask[target_idx] = 0.0
-    W_t = scm.W * mask.view(1, G, 1)  # zeroes row `target_idx`
+    W_t = scm.W * mask.view(1, G, 1)
 
-    I = torch.eye(G, dtype=scm.W.dtype, device=scm.W.device).expand(N, G, G)
+    target_mean = -(1.0 - knockdown_factor) * 2.0
+    target_std = knockdown_factor
 
-    eps = torch.randn(
-        N, G, n_cells,
+    x0 = torch.randn(
+        N, n_cells, G,
         dtype=scm.W.dtype, device=scm.W.device, generator=generator,
     )
-    knockdown_noise = torch.randn(
+    kn0 = torch.randn(
         N, n_cells,
         dtype=scm.W.dtype, device=scm.W.device, generator=generator,
     )
-    eps[:, target_idx, :] = (
-        knockdown_factor * knockdown_noise - (1.0 - knockdown_factor) * 2.0
-    )
+    x0[:, :, target_idx] = target_std * kn0 + target_mean
 
-    x = _solve_batch(I - W_t, eps)
-    return x.transpose(-1, -2).contiguous()
+    return _cascade(
+        W_t, x0, n_steps,
+        target_idx=target_idx,
+        target_mean=target_mean,
+        target_std=target_std,
+        generator=generator,
+    )

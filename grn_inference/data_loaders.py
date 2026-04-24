@@ -51,6 +51,99 @@ class SyntheticTruth:
     gene_names: list[str]
 
 
+def _simulate_lineage_cascade(
+    W: np.ndarray,
+    n_cells: int,
+    n_genes: int,
+    depth: int,
+    branching: int,
+    noise_std: float,
+    rng: np.random.Generator,
+    *,
+    target_idx: int | None = None,
+    target_mean: float = 0.0,
+    target_std: float = 1.0,
+) -> np.ndarray:
+    """Grow a branching lineage tree and return (a sample of) the leaves.
+
+    At every generation each cell begets ``branching`` children whose
+    state is ``W @ parent + eps``. Enough founders are seeded so that
+    the number of leaves is at least ``n_cells``; the leaves are then
+    subsampled (without replacement) to exactly ``n_cells``.
+
+    If ``target_idx`` is given, gene ``target_idx`` is treated as
+    perturbed: each founder draws a single target value from
+    ``N(target_mean, target_std^2)`` that is held constant through
+    every cascade step and inherited by all of the founder's
+    descendants. Downstream genes see the same target value at every
+    cascade step, preserving per-cell A-B coupling that a fresh noise
+    draw each step would otherwise destroy.
+    """
+    n_founders = int(np.ceil(n_cells / (branching ** depth)))
+    x = rng.normal(0.0, noise_std, size=(n_founders, n_genes))
+    hold_target = None
+    if target_idx is not None:
+        hold_target = rng.normal(target_mean, target_std, size=n_founders)
+        x[:, target_idx] = hold_target
+
+    for _ in range(depth):
+        x = np.repeat(x, branching, axis=0)
+        if hold_target is not None:
+            hold_target = np.repeat(hold_target, branching)
+        eps = rng.normal(0.0, noise_std, size=x.shape)
+        x = x @ W.T + eps
+        if hold_target is not None:
+            x[:, target_idx] = hold_target
+
+    if x.shape[0] > n_cells:
+        idx = rng.choice(x.shape[0], size=n_cells, replace=False)
+        x = x[idx]
+    return x
+
+
+def _simulate_intervention_per_cell_alpha(
+    W: np.ndarray,
+    n_cells: int,
+    n_genes: int,
+    depth: int,
+    noise_std: float,
+    rng: np.random.Generator,
+    *,
+    target_idx: int,
+    alpha_per_cell: np.ndarray,
+    knockdown_factor: float,
+) -> np.ndarray:
+    """Intervention cascade with a per-cell knockdown strength.
+
+    Each cell gets its own ``alpha`` drawn from the intervention-strength
+    range, so within a single ``do(target)`` population there is
+    cell-to-cell variation in how hard the knockdown bites. No
+    branching — each of the ``n_cells`` trajectories is independent, so
+    every cell's alpha is truly private (not shared with lineage
+    siblings).
+    """
+    assert alpha_per_cell.shape == (n_cells,)
+    knock_mean = -alpha_per_cell * (1.0 - knockdown_factor) * 2.0
+    # Preserve baseline variance on the perturbed gene (shrinking it
+    # collapses the within-arm coupling signal).
+    hold_target = rng.standard_normal(n_cells) * noise_std + knock_mean
+
+    x = rng.normal(0.0, noise_std, size=(n_cells, n_genes))
+    x[:, target_idx] = hold_target
+
+    for _ in range(depth):
+        eps = rng.normal(0.0, noise_std, size=x.shape)
+        x_next = x @ W.T + eps
+        # Perfect-intervention semantic: the perturbed gene is pinned
+        # to its per-cell value at every cascade step, so the signal
+        # propagates to downstream genes instead of being erased by a
+        # fresh noise draw each step.
+        x_next[:, target_idx] = hold_target
+        x = x_next
+
+    return x
+
+
 def make_synthetic_dataset(
     n_genes: int = 50,
     edge_density: float = 0.1,
@@ -61,25 +154,49 @@ def make_synthetic_dataset(
     knockdown_factor: float = 0.3,
     noise_std: float = 1.0,
     n_perturbed_genes: int | None = None,
+    forbid_two_cycles: bool = True,
+    lineage_depth: int = 5,
+    branching_factor: int = 2,
+    perturbation_strength_range: tuple[float, float] = (0.3, 0.9),
+    per_cell_alpha_spread: float = 0.0,
     seed: int = 0,
 ) -> tuple[Dataset, SyntheticTruth]:
-    """Generate a Dataset from a known linear cyclic SCM.
+    """Generate a Dataset from a known linear cyclic SCM via a tree cascade.
 
-    The generative model is::
+    Observed cells are the leaves of a depth-``lineage_depth`` branching
+    tree. A small number of founders are seeded with random states
+    ``x_0 ~ N(0, noise_std^2 I)``. At each generation, every cell begets
+    ``branching_factor`` children whose state is::
 
-        x = (I - W)^{-1} (epsilon + c)
+        x_child = W @ x_parent + epsilon,   epsilon ~ N(0, noise_std^2 I)
 
-    where ``W`` is a sparse adjacency with spectral radius < 1 (for
-    stability), ``c`` is a per-gene baseline offset (zero here, but
-    ``knockdown_factor`` shifts it for intervened genes), and
-    ``epsilon ~ N(0, noise_std^2 I)``.
+    After ``lineage_depth`` generations, the leaves are returned (shuffled
+    by :func:`numpy.random.Generator.choice` and truncated to the requested
+    cell count). The number of founders per arm is picked automatically so
+    that ``n_founders * branching_factor ** lineage_depth >= n_cells``.
 
-    Interventions are modelled as *soft knockdowns*: when gene ``t``
-    is targeted, we zero out row ``t`` of ``W`` (``t`` no longer
-    responds to its regulators) and set its emission to
-    ``knockdown_factor * epsilon_t``. This mimics CRISPRi's incomplete
-    knockdown with residual noise, which is how the Replogle data
-    looks in practice.
+    This replaces the old closed-form equilibrium ``x = (I - W)^{-1} eps``
+    with a transient-dynamics process. At ``lineage_depth -> infinity`` the
+    marginal distribution of each leaf converges back to the equilibrium
+    (assuming ``rho(W) < 1``); a finite depth like 5 gives cascades that
+    carry directional information the equilibrium smears out.
+
+    Interventions are modelled as *partial soft knockdowns*. For each gene
+    ``t``, a per-gene strength ``alpha_t ~ U(*perturbation_strength_range)``
+    is drawn once and applied uniformly across the arm's cells:
+
+    * ``W_t[t, :] = (1 - alpha_t) * W[t, :]`` — gene ``t`` only partially
+      listens to its regulators.
+    * Gene ``t``'s emission at every cascade step is drawn from
+      ``N(-alpha_t * (1 - knockdown_factor) * 2, noise_std^2)`` — the
+      mean shifts with ``alpha_t`` but the variance is held at baseline.
+      We keep the variance to preserve per-cell coupling: within
+      ``do(t)`` cells gene ``t`` retains genuine cell-to-cell variance,
+      so downstream genes on a direct edge from ``t`` still have a
+      detectable ``corr(t, child | do(t))`` signal. Shrinking the noise
+      under strong ``alpha`` collapsed that signal to noise.
+    * The founder's own gene-``t`` state is initialised from the same
+      intervention distribution, so cells are "born perturbed".
 
     Parameters
     ----------
@@ -113,6 +230,30 @@ def make_synthetic_dataset(
         to the statistical metric. Useful for testing methods that are
         supposed to leverage observational data to pick up
         unperturbed-source edges.
+    forbid_two_cycles
+        If True (default), for every pair ``(i, j)`` the mask keeps at
+        most one direction: either ``i -> j`` or ``j -> i``, never
+        both. Longer cycles (``A -> B -> C -> A``) are still allowed.
+        This removes the direction-confusion failure mode that hits
+        any method that ranks edges by correlated activity, since for
+        a two-cycle the observational covariance is symmetric in
+        ``(i, j)``.
+    lineage_depth
+        Number of cascade steps (tree depth) between founders and leaves.
+    branching_factor
+        Each parent begets this many children per generation.
+    perturbation_strength_range
+        ``(lo, hi)`` interval for the per-gene intervention strength
+        ``alpha``. At 0 the gene behaves normally; at 1 it is fully
+        knocked out. Different genes are hit with different ``alpha``.
+    per_cell_alpha_spread
+        If non-zero, each cell in a given arm draws its own
+        ``alpha_cell ~ U(alpha_gene - spread/2, alpha_gene + spread/2)``
+        (clipped to [0, 1]), so knockdown strength varies cell-to-cell
+        within a single intervention population. ``0.0`` (default)
+        reproduces the existing per-gene-only behaviour bit-identically.
+        Enabling this switches the intervention simulator from the
+        branching tree to independent per-cell cascades.
     seed
         RNG seed.
 
@@ -125,8 +266,20 @@ def make_synthetic_dataset(
     # ---- Build W --------------------------------------------------------
     mask = (rng.uniform(size=(n_genes, n_genes)) < edge_density).astype(float)
     np.fill_diagonal(mask, 0.0)
-    weights = rng.uniform(-weight_scale, weight_scale, size=(n_genes, n_genes))
-    W = weights * mask
+    if forbid_two_cycles:
+        # Where both (i,j) and (j,i) are 1, drop one at random.
+        both = np.logical_and(mask, mask.T)
+        i_idx, j_idx = np.where(np.triu(both, k=1))
+        drop_ij = rng.random(len(i_idx)) < 0.5
+        mask[i_idx[drop_ij], j_idx[drop_ij]] = 0.0
+        mask[j_idx[~drop_ij], i_idx[~drop_ij]] = 0.0
+    # Every edge has magnitude 1 with random sign; the spectral rescaling
+    # below uniformly scales the whole matrix, so all non-zero entries
+    # end up with the same magnitude. `weight_scale` is unused in this
+    # uniform-sign regime and is kept only for signature compatibility.
+    _ = weight_scale  # intentionally unused
+    signs = np.where(rng.random(size=(n_genes, n_genes)) < 0.5, -1.0, 1.0)
+    W = signs * mask
 
     # Rescale to hit target spectral radius
     eigs = np.linalg.eigvals(W)
@@ -136,12 +289,11 @@ def make_synthetic_dataset(
 
     gene_names = [f"G{i:04d}" for i in range(n_genes)]
 
-    # ---- Observational cells -------------------------------------------
-    # x = (I - W)^{-1} epsilon
-    I = np.eye(n_genes)
-    inv = np.linalg.inv(I - W)
-    eps_ctrl = rng.normal(0.0, noise_std, size=(n_control_cells, n_genes))
-    x_ctrl = eps_ctrl @ inv.T  # (n_ctrl, n_genes)
+    # ---- Observational cells (tree cascade) ----------------------------
+    x_ctrl = _simulate_lineage_cascade(
+        W, n_control_cells, n_genes,
+        lineage_depth, branching_factor, noise_std, rng,
+    )
 
     interventions: list[str] = [CONTROL_LABEL] * n_control_cells
     all_expr = [x_ctrl]
@@ -158,20 +310,51 @@ def make_synthetic_dataset(
             rng.choice(n_genes, size=n_perturbed_genes, replace=False).tolist()
         )
 
-    # ---- Interventional cells ------------------------------------------
-    # For gene t: zero row t of W (t no longer regulated by its parents),
-    # replace epsilon_t with a knockdown-specific noise.
+    # ---- Per-gene partial-knockdown strength ---------------------------
+    alpha_lo, alpha_hi = perturbation_strength_range
+    if not 0.0 <= alpha_lo <= alpha_hi <= 1.0:
+        raise ValueError(
+            f"perturbation_strength_range must be in [0, 1]; got {perturbation_strength_range}"
+        )
+    if per_cell_alpha_spread < 0.0:
+        raise ValueError(
+            f"per_cell_alpha_spread must be >= 0; got {per_cell_alpha_spread}"
+        )
+    alphas = rng.uniform(alpha_lo, alpha_hi, size=n_genes)
+
+    # ---- Interventional cells (tree cascade + partial knockdown) -------
     for t in perturbed_indices:
-        W_t = W.copy()
-        W_t[t, :] = 0.0
-        inv_t = np.linalg.inv(I - W_t)
-        eps_t = rng.normal(0.0, noise_std, size=(n_cells_per_perturbation, n_genes))
-        # Knockdown: force gene t's own emission toward lower values.
-        # Using scaled-down noise shifts the mean/variance of x_t downward.
-        eps_t[:, t] = knockdown_factor * rng.normal(
-            0.0, noise_std, size=n_cells_per_perturbation
-        ) - (1.0 - knockdown_factor) * 2.0  # offset for visibility
-        x_t = eps_t @ inv_t.T
+        alpha = float(alphas[t])
+
+        if per_cell_alpha_spread > 0.0:
+            half = per_cell_alpha_spread / 2.0
+            alpha_per_cell = np.clip(
+                rng.uniform(
+                    alpha - half, alpha + half, size=n_cells_per_perturbation,
+                ),
+                0.0, 1.0,
+            )
+            x_t = _simulate_intervention_per_cell_alpha(
+                W, n_cells_per_perturbation, n_genes,
+                lineage_depth, noise_std, rng,
+                target_idx=t,
+                alpha_per_cell=alpha_per_cell,
+                knockdown_factor=knockdown_factor,
+            )
+        else:
+            W_t = W.copy()
+            W_t[t, :] = (1.0 - alpha) * W[t, :]
+            knock_mean = -alpha * (1.0 - knockdown_factor) * 2.0
+            # Keep the perturbed gene's noise variance at baseline so that
+            # cells within an arm still have meaningful A-variance. Without
+            # this, strong knockdown shrinks Var(A | do(A)) so small that
+            # within-arm correlations collapse to noise.
+            knock_std = noise_std
+            x_t = _simulate_lineage_cascade(
+                W_t, n_cells_per_perturbation, n_genes,
+                lineage_depth, branching_factor, noise_std, rng,
+                target_idx=t, target_mean=knock_mean, target_std=knock_std,
+            )
         all_expr.append(x_t)
         interventions.extend([gene_names[t]] * n_cells_per_perturbation)
 

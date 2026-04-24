@@ -65,6 +65,7 @@ def fit_scm_ensemble(
     variance_weight: float = 1.0,
     knockdown_factor: float = 0.3,
     spectral_threshold: float | None = 0.80,
+    n_cascade_steps: int = 5,
     seed: int = 0,
     log_every: int | None = 100,
 ) -> FitHistory:
@@ -112,13 +113,16 @@ def fit_scm_ensemble(
             continue
 
         if target == CONTROL_LABEL:
-            sim = simulate_control(scm, batch_size, generator=torch_gen)
+            sim = simulate_control(
+                scm, batch_size, generator=torch_gen, n_steps=n_cascade_steps,
+            )
         else:
             tgt_idx = data.gene_idx(target)
             sim = simulate_intervention(
                 scm, tgt_idx, batch_size,
                 knockdown_factor=knockdown_factor,
                 generator=torch_gen,
+                n_steps=n_cascade_steps,
             )
 
         per_cand = moment_matching_discrepancy(

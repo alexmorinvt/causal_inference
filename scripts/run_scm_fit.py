@@ -21,8 +21,11 @@ import numpy as np
 
 from grn_inference import (
     EnsembleSCMFitter,
+    IndirectPruningModel,
     MeanDifferenceModel,
     RandomBaseline,
+    ShiftCorrModel,
+    ShiftPathsModel,
     evaluate_statistical,
     make_synthetic_dataset,
 )
@@ -71,6 +74,18 @@ def comparison_table() -> None:
         rb_edges = RandomBaseline(top_k=top_k, seed=0).fit_predict(data)
         rb_time = time.time() - t0
 
+        t0 = time.time()
+        ip_edges = IndirectPruningModel(top_k=top_k).fit_predict(data)
+        ip_time = time.time() - t0
+
+        t0 = time.time()
+        sp_edges = ShiftPathsModel(top_k=top_k, verbose=True).fit_predict(data)
+        sp_time = time.time() - t0
+
+        t0 = time.time()
+        sc_edges = ShiftCorrModel(top_k=top_k, corr_weight=1.0).fit_predict(data)
+        sc_time = time.time() - t0
+
         fitter_res = evaluate_statistical(
             fitter_edges, data, omission_sample_size=500,
             rng=np.random.default_rng(99),
@@ -83,6 +98,18 @@ def comparison_table() -> None:
             rb_edges, data, omission_sample_size=500,
             rng=np.random.default_rng(99),
         )
+        ip_res = evaluate_statistical(
+            ip_edges, data, omission_sample_size=500,
+            rng=np.random.default_rng(99),
+        )
+        sp_res = evaluate_statistical(
+            sp_edges, data, omission_sample_size=500,
+            rng=np.random.default_rng(99),
+        )
+        sc_res = evaluate_statistical(
+            sc_edges, data, omission_sample_size=500,
+            rng=np.random.default_rng(99),
+        )
 
         header = (
             f"{'method':<22} {'mean W1':>10} {'FOR':>10} "
@@ -91,6 +118,9 @@ def comparison_table() -> None:
         print(header)
         print("-" * len(header))
         for name, res, t in [
+            ("IndirectPruning", ip_res, ip_time),
+            ("ShiftCorrModel", sc_res, sc_time),
+            ("ShiftPathsModel", sp_res, sp_time),
             ("EnsembleSCMFitter", fitter_res, fitter_time),
             ("Mean Difference", md_res, md_time),
             ("Random", rb_res, rb_time),
@@ -104,6 +134,9 @@ def comparison_table() -> None:
         true_set = set(truth.true_edges)
         print("True-edge recovery:")
         for name, edges in [
+            ("  IndirectPruning  ", ip_edges),
+            ("  ShiftCorrModel   ", sc_edges),
+            ("  ShiftPathsModel  ", sp_edges),
             ("  EnsembleSCMFitter", fitter_edges),
             ("  Mean Difference  ", md_edges),
             ("  Random           ", rb_edges),
