@@ -987,3 +987,20 @@ Picked `shift_boost_power = 0.5` again — at power 0 precision is higher but hi
 Train +4.4%/+3.2%, test +2.8%/+3.6%. All four positive. **New hidden-recall ceiling: 0.781 train / 0.798 test** (NR's old record was 0.736/0.675).
 
 **Verdict**: **KEPT**.
+
+### Iteration 36 — RA + ICP (reverted, test precision regresses)
+
+**Hypothesis**: ICP's new hidden-recall ceiling should add useful diversity to the rank-aggregation ensemble. Extending RA from (NR, PI, DC, DT) to (NR, PI, DC, DT, ICP).
+
+**Numbers**:
+
+| split | method | precision@k | hidden recall |
+|-------|--------|----------:|------------:|
+| train (0,1,2) | RA + ICP (iter 36) | 0.165 (tie) | 0.670 (+5.7% vs iter 31) |
+| train (0,1,2) | RA (iter 31, no ICP) | 0.165 | 0.634 |
+| test (100,101,102) | RA + ICP (iter 36) | 0.169 (−1.7%) | 0.671 (+3.2%) |
+| test (100,101,102) | RA (iter 31, no ICP) | 0.172 | 0.650 |
+
+Train precision ties (not beat), test precision regresses. ICP's lower precision pulls the ensemble down even though hidden recall is positive on both splits.
+
+**Verdict**: **REVERTED**. RA stays at iter 31's 4-estimator ensemble.
