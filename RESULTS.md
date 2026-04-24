@@ -717,3 +717,16 @@ Also updated the DC smoke test `test_beats_random_on_w1` → `test_beats_random_
 Train +3.6%/+65%, test +1.4%/+65%.
 
 **Verdict**: **KEPT**. Biggest single-iteration improvement in the DC family so far — doubles hidden recall while improving precision on both splits.
+
+### Iteration 26 — DC saturation checkpoint (no commit)
+
+Three variants tried against iter 25 baseline; none cleared both splits.
+
+| attempt | train prec | train hidden | test prec | test hidden | verdict |
+|---------|-----------:|-------------:|----------:|------------:|---------|
+| iter 25 baseline | 0.145 | 0.632 | 0.142 | 0.611 | — |
+| pert-pert direction temp (t=2, 5, 10, 20) | 0.147 (best) | 0.627 | 0.144 | 0.609 | train hidden regresses |
+| per-arm cell bootstrap (n=10, 30, 50) | 0.145 | 0.665 (n=30) | 0.137 | 0.626 | test prec regresses |
+| DC score → PI matrix inversion as final step | 0.130 | 0.570 | 0.129 | 0.555 | big regress |
+
+No code change committed. DC family at `precision@k ≈ 0.145`, `hidden-source recall ≈ 0.63` on train. Appears saturated in the current diff-cov + direction-weight + IV-boost structure. Further gains likely need a substantially different scoring mechanism — probably yet another family (SCC decomposition, min-cut, or a truly different identifiability argument).
