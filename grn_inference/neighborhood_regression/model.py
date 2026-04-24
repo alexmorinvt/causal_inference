@@ -107,12 +107,23 @@ class NeighborhoodRegressionModel:
         information and leave the score unchanged.
 
         Set to ``False`` to recover iteration-1 scoring exactly.
+    within_arm_corr_weight
+        Multiplicative boost on the perturbed-source bucket from the
+        within-arm Pearson correlation between source and target:
+        ``score_pert(S, T) = |shift[S, T]| * (1 + w * |corr_do_S(S, T)|)``.
+        For a direct edge ``S -> T`` the within-``do(S)`` cells that
+        receive a stronger residual knockdown of ``S`` show a
+        proportionally stronger shift in ``T`` — a per-cell coupling.
+        Cascade shortcuts ``S -> M -> T`` attenuate this coupling
+        because ``M`` adds fresh noise between the endpoints.
+        ``0.0`` recovers plain MD shift for the perturbed bucket.
     """
 
     top_k: int = 1000
     unperturbed_fraction: float = 0.5
     ridge_lambda: float = 1e-4
     reverse_shift_damping: bool = True
+    within_arm_corr_weight: float = 1.0
 
     def fit_predict(self, data: Dataset) -> list[Edge]:
         ctrl_mask = data.control_mask()
@@ -126,16 +137,34 @@ class NeighborhoodRegressionModel:
         G = data.n_genes
         perturbed_set = set(data.perturbed_genes())
 
-        # ---- Perturbed-source bucket: MD-style shift -------------------
+        # ---- Perturbed-source bucket: MD-style shift, optionally boosted
+        # by within-arm correlation between source and target.
         shift = np.zeros((G, G), dtype=np.float32)
+        within_corr = np.zeros((G, G), dtype=np.float32)
         for src in perturbed_set:
             mask = data.intervention_mask(src)
             if not mask.any():
                 continue
             s = data.gene_idx(src)
-            intv_means = data.expression[mask].mean(axis=0)
-            shift[s, :] = np.abs(intv_means - ctrl_means)
+            intv_expr = data.expression[mask]
+            shift[s, :] = np.abs(intv_expr.mean(axis=0) - ctrl_means)
+            if self.within_arm_corr_weight > 0.0:
+                # Pearson correlation of gene s against every gene,
+                # within the do(s) arm.
+                a = intv_expr[:, s].astype(np.float64)
+                ac = a - a.mean()
+                a_sq = float((ac * ac).sum())
+                if a_sq > 0.0:
+                    bc = intv_expr.astype(np.float64) - intv_expr.mean(axis=0)
+                    b_sq = (bc * bc).sum(axis=0)
+                    num = (ac[:, None] * bc).sum(axis=0)
+                    den = np.sqrt(a_sq * b_sq + 1e-12)
+                    corr = np.where(den > 0.0, num / den, 0.0)
+                    within_corr[s, :] = np.abs(corr).astype(np.float32)
         np.fill_diagonal(shift, 0.0)
+        np.fill_diagonal(within_corr, 0.0)
+        shift_boosted = shift * (1.0 + self.within_arm_corr_weight * within_corr)
+        shift_boosted = shift_boosted.astype(np.float32)
 
         # ---- Unperturbed-source bucket: neighborhood regression --------
         # Center control expression, compute ridge-regularised
@@ -190,7 +219,7 @@ class NeighborhoodRegressionModel:
                 if s == t:
                     continue
                 if pert_mask[s]:
-                    sc = float(shift[s, t])
+                    sc = float(shift_boosted[s, t])
                     if sc > 0.0:
                         pert_scores.append((sc, s, t))
                 else:

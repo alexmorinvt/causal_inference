@@ -97,7 +97,11 @@ def test_equals_mean_difference_when_unperturbed_fraction_is_zero():
         n_perturbed_genes=10,
         seed=3,
     )
-    nr = NeighborhoodRegressionModel(top_k=50, unperturbed_fraction=0.0)
+    # within_arm_corr_weight=0 disables the per-cell coupling boost
+    # so the perturbed bucket scores edges identically to MD.
+    nr = NeighborhoodRegressionModel(
+        top_k=50, unperturbed_fraction=0.0, within_arm_corr_weight=0.0,
+    )
     md = MeanDifferenceModel(top_k=50)
 
     nr_edges = nr.fit_predict(data)
