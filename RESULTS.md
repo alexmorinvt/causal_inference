@@ -863,3 +863,19 @@ All-four equal is the default. NR-heavy slightly bumps hidden at the cost of pre
 RA beats MD +29%/+30% precision on train/test; hidden recall goes from 0 → 0.634/0.650. Best test precision across all five families.
 
 **Verdict**: **KEPT** as RA family's iter-31 baseline.
+
+### Iteration 32 — RA saturation checkpoint (no commit)
+
+Tried variants vs iter 31:
+
+| attempt | train prec | train hidden | test prec | test hidden |
+|---------|-----------:|-------------:|----------:|------------:|
+| iter 31 (eq sum) | 0.165 | 0.634 | 0.172 | 0.650 |
+| weighted (NR 2×, PI 2×, DC 2×, DT 2×, other combos) | best 0.166 | best 0.651 | best 0.172 | best 0.654 | all fail "beats both" |
+| geometric mean of percentiles | 0.165 | 0.651 | 0.172 | 0.648 | tiny gain, test regresses slightly |
+| `min` of percentiles (hard AND) | 0.164 | 0.736 | 0.163 | 0.675 | big train hidden jump, but train prec regresses and test prec drops |
+| median of percentiles | 0.162 | 0.637 | 0.171 | 0.643 | regresses |
+
+`min` aggregation reproduces NR's numbers exactly (0.164/0.736 train, 0.163/0.675 test) — it effectively selects edges that NR ranks highly since NR has the deepest hidden-source recall, and `min` is bottlenecked by the weakest ranker per edge. Interesting structural observation but not a beat.
+
+No code change; RA saturates at sum/eq default. Could revisit with a different aggregation mechanism (weighted Borda with trained weights) but that would need a validation split or theory.
