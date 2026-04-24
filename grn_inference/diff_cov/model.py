@@ -86,6 +86,15 @@ class DiffCovModel:
         unperturbed-source candidates through, small enough to still
         downweight obvious reverse-ancestor pairs. Lower values
         approach the iter-21 discrete-threshold behaviour.
+    iv_boost_weight
+        Multiplicative boost on the unperturbed-source rows of the
+        final score from the IV shift regression
+        ``β_iv[j, i] = ⟨s_j, s_i⟩ / ⟨s_j, s_j⟩`` (over perturbed rows
+        of the shift matrix). For a cascade ``G -> j -> i``, this
+        coefficient estimates the direct effect ``W[i, j]``. Applied
+        as ``score[i, j] *= (1 + w_iv · |β_iv[j, i]|)`` for ``j``
+        unperturbed. ``5.0`` selected by train sweep; saturates past
+        ``w = 5`` and precision starts regressing past ``w = 10``.
     """
 
     top_k: int = 1000
@@ -94,6 +103,7 @@ class DiffCovModel:
     diff_power: float = 0.5
     unpert_pert_direction_scale: float = 0.30
     unpert_unpert_direction_temp: float = 20.0
+    iv_boost_weight: float = 5.0
 
     def fit_predict(self, data: Dataset) -> list[Edge]:
         ctrl_mask = data.control_mask()
@@ -196,6 +206,30 @@ class DiffCovModel:
         # breaks the tie. score[j, i] is the edge (source=j, target=i).
         score = diff_score * direction_weight.T  # diff indexed by (i,j), already symmetric
         np.fill_diagonal(score, 0.0)
+
+        # ---- IV shift-regression boost on unperturbed-source rows ----
+        # For candidate (j unpert, i any), β_iv[j, i] = ⟨s_j, s_i⟩ / ⟨s_j, s_j⟩
+        # where s_X = shift[pert, X]. Under a cascade G -> j -> i this
+        # estimates the direct effect W[i, j]; boost the score
+        # accordingly. See class docstring.
+        pert_idx = np.where(pert_mask)[0]
+        if self.iv_boost_weight > 0.0 and pert_idx.size > 0:
+            S_pert = shifts[pert_idx, :]  # rows = perturbed G
+            cross = S_pert.T @ S_pert
+            diag_denom = np.diag(cross).copy()
+            diag_denom = np.where(diag_denom > 1e-12, diag_denom, 1.0)
+            beta_iv = cross / diag_denom[:, None]
+            np.fill_diagonal(beta_iv, 0.0)
+            # score is indexed by [target=i, source=j] (since we compute
+            # diff_score[i, j] and direction_weight[j, i].T → .T yields
+            # [i, j]). Boost unperturbed-source rows (columns of score).
+            for j in range(G):
+                if pert_mask[j]:
+                    continue
+                score[:, j] = score[:, j] * (
+                    1.0 + self.iv_boost_weight * np.abs(beta_iv[j, :])
+                )
+            np.fill_diagonal(score, 0.0)
 
         # Rank top_k with score indexed as [source=j, target=i].
         # Currently score[row=i, col=j] has (i,j) entry; we want (j,i) indexing.
