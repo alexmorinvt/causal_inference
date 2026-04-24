@@ -138,11 +138,14 @@ class PathInversionModel:
             )
         ctrl_expr = data.expression[ctrl_mask]
         G = data.n_genes
-        perturbed_set = set(data.perturbed_genes())
+        # Sort perturbed genes for deterministic iteration across Python
+        # invocations (string hashes are randomized per-process; iterating
+        # a set would change the order of bootstrap RNG draws).
+        perturbed_genes_sorted = sorted(data.perturbed_genes())
 
         pert_mask = np.zeros(G, dtype=bool)
         pert_idx_list: list[int] = []
-        for g in perturbed_set:
+        for g in perturbed_genes_sorted:
             i = data.gene_idx(g)
             pert_mask[i] = True
             pert_idx_list.append(i)
@@ -151,7 +154,7 @@ class PathInversionModel:
         arm_indices: dict[str, np.ndarray] = {
             "__ctrl__": np.flatnonzero(ctrl_mask),
         }
-        for g in perturbed_set:
+        for g in perturbed_genes_sorted:
             arm_indices[g] = np.flatnonzero(data.intervention_mask(g))
 
         n_boot = max(1, int(self.n_bootstrap))
@@ -173,7 +176,7 @@ class PathInversionModel:
                 ctrl_means_b = ctrl_expr.mean(axis=0)
 
             shifts = np.zeros((G, G), dtype=np.float64)
-            for src in perturbed_set:
+            for src in perturbed_genes_sorted:
                 idx_pool = arm_indices[src]
                 if idx_pool.size == 0:
                     continue

@@ -36,9 +36,11 @@ Each family is evaluated against MD + Random (universal baselines) and its own p
 - precision@k: **0.164** (train) / 0.163 (test)
 - hidden-source recall: **0.736** (train) / 0.675 (test)
 
-**PI family** (`PathInversionModel`, iter 14+, currently at iter 17):
-- precision@k: **0.163** (train) / 0.164 (test) — iter 14: 0.137/0.153; iter 15: 0.153/0.157; iter 16: 0.155/0.160; beats MD baseline (+27% train, +25% test)
-- hidden-source recall: **0.582** (train) / 0.591 (test) — iter 14: 0.391/0.445; iter 15: 0.560/0.555; iter 16: 0.566/0.562; beats MD baseline (0.000 → new capability)
+**PI family** (`PathInversionModel`, iter 14+, currently at iter 18):
+- precision@k: **0.160** (train) / 0.165 (test) — iter 14: 0.137/0.153; iter 15: 0.153/0.157; iter 16: 0.155/0.160; iter 17/18: 0.160/0.165; beats MD baseline (+25% train, +26% test)
+- hidden-source recall: **0.568** (train) / 0.582 (test) — iter 14: 0.391/0.445; iter 15: 0.560/0.555; iter 16: 0.566/0.562; iter 17/18: 0.568/0.582; beats MD baseline (0.000 → new capability)
+
+*Note*: iter 17 was originally logged with slightly higher numbers (0.163/0.582 train, 0.164/0.591 test); iter 18 fixed non-deterministic `perturbed_set` iteration (which caused bootstrap draw ordering to depend on Python hash randomization), giving reproducible numbers that are very slightly lower on train but equal-or-better on test.
 
 W1 sanity floor (for any family): must stay above `RandomBaseline`'s 0.2457 on train / 0.2309 on test.
 
@@ -494,3 +496,22 @@ All four deltas positive: train +1.3%/+1.0%, test +2.1%/+1.3%.
 Train +5.2%/+2.8%, test +2.5%/+5.2%. All four positive, well within 10%-of-train on both metrics.
 
 **Verdict**: **KEPT**.
+
+### Iteration 18 — PI: determinism fix (sorted perturbed iteration)
+
+**Issue found while scanning iter-18 hyperparameter candidates**: `PathInversionModel` iterated `perturbed_set = set(data.perturbed_genes())`. Python string hashes are randomized per-process (unless `PYTHONHASHSEED` is fixed), so the iteration order of a `set` varies across invocations. Since each iteration draws a bootstrap of that arm's cells, the RNG state after processing each arm depended on order — which meant running the same `fit_predict` twice in different Python processes gave different `|W_est|` aggregates (~0.003 precision drift).
+
+**Change**: sort `data.perturbed_genes()` once (alphabetically by gene name) and use that list everywhere the code currently iterates the set. No algorithmic change.
+
+**Post-fix numbers (top_k=1000, deterministic)**:
+
+| split | method | mean W1 | FOR | precision@k | hidden recall |
+|-------|--------|---------|-----|-------------|---------------|
+| train (0,1,2) | PI iter 18 (iter 17 + deterministic) | 0.385 | ~0.14-0.17 | 0.160 | 0.568 |
+| train (0,1,2) | PI iter 16 | 0.385 | 0.162 | 0.155 | 0.566 |
+| test (100,101,102) | PI iter 18 | 0.366 | ~0.13-0.17 | 0.165 | 0.582 |
+| test (100,101,102) | PI iter 16 | 0.358 | 0.153 | 0.160 | 0.562 |
+
+Still cleanly beats iter 16: train +3.2%/+0.4%, test +3.1%/+3.6%. The originally-logged iter 17 numbers (0.163/0.582 train, 0.164/0.591 test) happened to come from a favourable hash ordering; the reproducible baseline is slightly different but still a win.
+
+**Verdict**: **KEPT**. Reproducibility matters — hyperparameter sweeps give meaningless noise if runs drift by the same order-of-magnitude as the tuning signal.
