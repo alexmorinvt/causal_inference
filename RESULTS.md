@@ -54,9 +54,9 @@ Each family is evaluated against MD + Random (universal baselines) and its own p
 - precision@k: **0.165** (train) / 0.172 (test) — beats MD baseline (+29% train, +31% test); best test precision across all families
 - hidden-source recall: **0.634** (train) / 0.650 (test) — beats MD baseline
 
-**ICP family** (`InvarianceICPModel`, iter 34+, currently at iter 34):
-- precision@k: **0.136** (train) / 0.142 (test) — beats MD baseline (+6% train, +8% test)
-- hidden-source recall: **0.757** (train) / 0.770 (test) — **best hidden recall across all families** (beats NR's 0.736/0.675)
+**ICP family** (`InvarianceICPModel`, iter 34+, currently at iter 35):
+- precision@k: **0.142** (train) / 0.146 (test) — iter 34: 0.136/0.142; iter 35: 0.142/0.146; beats MD baseline (+11% train, +12% test)
+- hidden-source recall: **0.781** (train) / 0.798 (test) — iter 34: 0.757/0.770; iter 35: 0.781/0.798; **best hidden recall across all families** (beats NR's 0.736/0.675 by ~6%/+18%)
 
 W1 sanity floor (for any family): must stay above `RandomBaseline`'s 0.2457 on train / 0.2309 on test.
 
@@ -956,3 +956,34 @@ Picked `shift_boost_power = 0.5` — best precision × hidden tradeoff; beats MD
 ICP beats MD baseline on both metrics on both splits (+6%/+8% precision, 0 → 0.77 hidden recall). **Highest hidden-source recall of any family** — beats NR's iter-13 record (0.736 train, 0.675 test).
 
 **Verdict**: **KEPT** as ICP family's iter-34 baseline. Theoretically orthogonal to NR's identifiability argument, and empirically unlocks a higher hidden-recall ceiling.
+
+### Iteration 35 — ICP: multivariate regression per arm
+
+**Hypothesis**: iter 34 used bivariate OLS per arm — regress `x_T` on a single candidate `x_S`. The classic ICP formulation uses the full multivariate regression (regress `x_T` on all other genes jointly), which conditions on available confounders and isolates direct-parent coefficients. Compute this via the per-arm ridge-regularised precision matrix: `β_arm[T, S] = -Θ_arm[T, S] / Θ_arm[T, T]`.
+
+Note also: in multivariate mode, we don't need to skip arms that pin `x_S` (conditioning on a constant `x_S` is fine for the regression of `x_T` on the rest).
+
+**Change**: added `regression_mode: str = "multivariate"` and `ridge: float = 1e-3` to `InvarianceICPModel`. Multivariate is the new default; `"bivariate"` preserves iter-34 behaviour.
+
+**Train sweep** `shift_boost_power` with multivariate on:
+
+| power | train prec | train hidden | test prec | test hidden |
+|------:|----------:|-------------:|---------:|------------:|
+| 0.0 | 0.148 | 0.438 | 0.147 | 0.424 |
+| **0.5** | **0.142** | **0.781** | **0.146** | **0.798** |
+| 1.0 | 0.129 | 0.833 | 0.132 | 0.851 |
+
+Picked `shift_boost_power = 0.5` again — at power 0 precision is higher but hidden drops from 0.78 to 0.44; power 1 has too much precision loss.
+
+**Numbers (top_k=1000)**:
+
+| split | method | mean W1 | FOR | precision@k | hidden recall |
+|-------|--------|---------|-----|-------------|---------------|
+| train (0,1,2) | ICP iter 35 (multivariate) | 0.506 | 0.315 | **0.142** | **0.781** |
+| train (0,1,2) | ICP iter 34 (bivariate) | 0.451 | 0.311 | 0.136 | 0.757 |
+| test (100,101,102) | ICP iter 35 | 0.493 | 0.293 | **0.146** | **0.798** |
+| test (100,101,102) | ICP iter 34 | 0.414 | 0.279 | 0.142 | 0.770 |
+
+Train +4.4%/+3.2%, test +2.8%/+3.6%. All four positive. **New hidden-recall ceiling: 0.781 train / 0.798 test** (NR's old record was 0.736/0.675).
+
+**Verdict**: **KEPT**.

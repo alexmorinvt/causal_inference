@@ -79,6 +79,20 @@ class InvarianceICPModel:
     var_epsilon
         Added to the std of per-arm β values before dividing — guards
         against division by near-zero in ``"snr"`` mode.
+    regression_mode
+        - ``"bivariate"``: per arm, regress each ``x_T`` on each
+          ``x_S`` separately (pairwise OLS).
+        - ``"multivariate"`` (default): per arm, regress each ``x_T``
+          on all other genes jointly (via ridge-regularised precision),
+          then read off ``β_arm[T, S] = -Θ[T, S]/Θ[T, T]``. Closer to
+          the original ICP formulation; conditions on confounders
+          available in the arm and gives cleaner direct-parent
+          coefficients.
+    ridge
+        Ridge regulariser on the per-arm covariance diagonal before
+        inversion (multivariate mode only). Keeps the per-arm
+        precision well-posed when ``n_cells_per_arm`` is close to
+        ``n_genes``.
     """
 
     top_k: int = 1000
@@ -86,6 +100,8 @@ class InvarianceICPModel:
     score_mode: str = "mean_abs"
     shift_boost_power: float = 0.5
     var_epsilon: float = 1e-3
+    regression_mode: str = "multivariate"
+    ridge: float = 1e-3
 
     def fit_predict(self, data: Dataset) -> list[Edge]:
         G = data.n_genes
@@ -112,56 +128,68 @@ class InvarianceICPModel:
             # Need at least 2 arms for cross-arm invariance.
             return []
 
-        # ---- Per-arm centered expression (for fast Cov / Var) --------
-        # For each arm, we need Cov(x_s, x_t) and Var(x_s) to get
-        # β[t, s | arm] = Cov / Var. Precompute per-arm covariance.
-        arm_cov: dict[str, np.ndarray] = {}  # (G, G) per arm
-        arm_var: dict[str, np.ndarray] = {}  # (G,) per arm
-        for name, idx in usable_arms.items():
-            x = data.expression[idx].astype(np.float64)
-            xc = x - x.mean(axis=0)
-            n = xc.shape[0]
-            cov = (xc.T @ xc) / max(n, 1)
-            arm_cov[name] = cov
-            arm_var[name] = np.diag(cov).copy()
-
-        # ---- For each candidate (S, T), score by SNR across arms -----
-        # Per-arm β[t, s | arm] = cov[t, s | arm] / var[s | arm].
-        # Score: mean(|β|) / (std(β) + eps).
-        # Skip arms where arm == S (x_s pinned) or arm == T (T eq broken).
+        # ---- Per-arm β estimation -------------------------------------
         arm_names = list(usable_arms.keys())
-
-        # Stack arm_cov and arm_var into 3D / 2D tensors for
-        # vectorised per-pair computation.
         A = len(arm_names)
-        cov_stack = np.stack(
-            [arm_cov[n] for n in arm_names], axis=0
-        )  # (A, G, G)
-        var_stack = np.stack(
-            [arm_var[n] for n in arm_names], axis=0
-        )  # (A, G)
 
-        # β[a, t, s] = cov_stack[a, t, s] / var_stack[a, s]
-        var_safe = np.where(var_stack > 1e-12, var_stack, 1.0)
-        beta = cov_stack / var_safe[:, None, :]  # broadcasts over t axis
+        if self.regression_mode == "bivariate":
+            # Bivariate: β_arm[t, s] = Cov(s, t) / Var(s) per arm.
+            arm_cov: dict[str, np.ndarray] = {}
+            arm_var: dict[str, np.ndarray] = {}
+            for name, idx in usable_arms.items():
+                x = data.expression[idx].astype(np.float64)
+                xc = x - x.mean(axis=0)
+                n = xc.shape[0]
+                cov = (xc.T @ xc) / max(n, 1)
+                arm_cov[name] = cov
+                arm_var[name] = np.diag(cov).copy()
+            cov_stack = np.stack([arm_cov[n] for n in arm_names], axis=0)
+            var_stack = np.stack([arm_var[n] for n in arm_names], axis=0)
+            var_safe = np.where(var_stack > 1e-12, var_stack, 1.0)
+            beta = cov_stack / var_safe[:, None, :]  # (A, G, G); [a, t, s]
+        elif self.regression_mode == "multivariate":
+            # Multivariate: β_arm[t, s] = -Θ_arm[t, s] / Θ_arm[t, t]
+            # where Θ_arm is ridge-regularised per-arm precision.
+            beta_list = []
+            for name, idx in usable_arms.items():
+                x = data.expression[idx].astype(np.float64)
+                xc = x - x.mean(axis=0)
+                n = xc.shape[0]
+                cov = (xc.T @ xc) / max(n, 1) + self.ridge * np.eye(G)
+                prec = np.linalg.inv(cov)
+                diag = np.diag(prec).copy()
+                diag = np.where(diag > 0, diag, 1.0)
+                beta_a = -prec / diag[:, None]
+                np.fill_diagonal(beta_a, 0.0)
+                beta_list.append(beta_a)
+            beta = np.stack(beta_list, axis=0)
+        else:
+            raise ValueError(
+                f"Unknown regression_mode={self.regression_mode!r}; "
+                "expected 'bivariate' or 'multivariate'."
+            )
 
-        # Mask: arm a cannot be used for candidate (s, t) if
-        # arm_name[a] == gene_name[s] (x_s pinned) or
-        # arm_name[a] == gene_name[t] (T eq broken).
-        # Build an (A, G) mask per position.
+        # ---- Usability mask: for candidate (s, t), skip arms that ---
+        # pin x_t (T's structural eq breaks). In multivariate mode we
+        # don't need to skip arms pinning x_s, because conditioning on
+        # x_s = const is fine for the regression of x_t on everyone.
+        # In bivariate mode, pinning x_s makes Var(x_s)=0 so skip both.
         arm_matches_gene = np.zeros((A, G), dtype=bool)
         for a, aname in enumerate(arm_names):
             if aname == CONTROL_LABEL:
                 continue
             arm_matches_gene[a, data.gene_idx(aname)] = True
 
-        # For candidate (s, t), usable iff not (arm==s) and not (arm==t).
-        # usable[a, s, t] = not (arm_matches_gene[a, s] or arm_matches_gene[a, t])
-        usable_mask = ~(
-            arm_matches_gene[:, :, None] | arm_matches_gene[:, None, :]
-        )  # (A, G, G)
+        if self.regression_mode == "bivariate":
+            usable_mask = ~(
+                arm_matches_gene[:, :, None] | arm_matches_gene[:, None, :]
+            )
+        else:  # multivariate: only T-pinning matters
+            # usable[a, t, s] = not arm_matches_gene[a, t]
+            usable_mask = ~np.broadcast_to(
+                arm_matches_gene[:, :, None], (A, G, G)
+            ).copy()
 
-        # Apply mask: set β of unusable arms to NaN so np.nanmean / nanstd ignore them.
         beta_masked = np.where(usable_mask, beta, np.nan)
 
         # Aggregate across arms (axis=0).
