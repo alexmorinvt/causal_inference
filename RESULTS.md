@@ -42,6 +42,10 @@ Each family is evaluated against MD + Random (universal baselines) and its own p
 
 *Note*: iter 17 was originally logged with slightly higher numbers (0.163/0.582 train, 0.164/0.591 test); iter 18 fixed non-deterministic `perturbed_set` iteration (which caused bootstrap draw ordering to depend on Python hash randomization), giving reproducible numbers that are very slightly lower on train but equal-or-better on test.
 
+**DC family** (`DiffCovModel`, iter 20+, currently at iter 20):
+- precision@k: **0.135** (train) / 0.144 (test) — beats MD baseline (+5.5% train, +9.9% test)
+- hidden-source recall: **0.170** (train) / 0.215 (test) — beats MD baseline (0.000 → new capability)
+
 W1 sanity floor (for any family): must stay above `RandomBaseline`'s 0.2457 on train / 0.2309 on test.
 
 ## Iteration log
@@ -538,3 +542,27 @@ Ran several small PI variants vs iter 18 with deterministic numbers; none cleare
 | mix obs correlation into perturbed T cols (α=0.9) | 0.1580 | 0.5847 | 0.1590 | 0.5798 | test prec regresses |
 
 No code change committed. PI family appears saturated at `precision@k ≈ 0.160`, `hidden-source recall ≈ 0.568` on train with the current matrix-inversion + IV-imputation + bootstrap pipeline.
+
+### Iteration 20 — DiffCovModel (new family: differential-covariance)
+
+**Hypothesis**: a graph-theoretic approach genuinely distinct from PI's matrix inversion. For each perturbed gene `G`, the within-`do(G)` covariance `Σ_G = Cov(x | do(G))` differs from `Σ_ctrl` in a pattern that reflects `G`'s position in the regulatory network. Aggregate `Σ |Σ_ctrl[i,j] − Σ_G[i,j]|` across perturbed `G`: edges participating in real regulatory subnetworks see their covariance change under many interventions, while confounder-driven or sampling-noise correlations are invariant. Direction is imposed afterwards from the one-sided `|shift|` asymmetry (perturbed endpoints) or β-diagonal asymmetry (both unperturbed).
+
+**Change**: new module `grn_inference/diff_cov/DiffCovModel`. Core computation:
+1. Compute `Σ_ctrl` and `Σ_G` for each `G` with ≥ 20 intervention cells.
+2. `diff_score[i, j] = mean_G |Σ_ctrl[i, j] - Σ_G[i, j]|` — symmetric intervention sensitivity.
+3. For candidate edge `(j, i)`, compute a direction weight in `[0, 1]` from `|shift|` (perturbed endpoints) or `|β|` asymmetry (unperturbed). Direction weight sums to 1 across the two directions of each pair.
+4. Final score `= diff_score · direction_weight`, ranked.
+
+**Numbers (top_k=1000)**:
+
+| split | method | mean W1 | FOR | precision@k | hidden recall | runtime/seed |
+|-------|--------|---------|-----|-------------|---------------|--------------|
+| train (0,1,2) | DiffCovModel | 0.279 | 0.198 | **0.135** | **0.170** | 0.03s |
+| train (0,1,2) | MeanDifferenceModel (baseline) | 0.274 | 0.000 | 0.128 | 0.000 | 0.01s |
+| train (0,1,2) | RandomBaseline (floor) | 0.246 | 0.353 | 0.116 | 0.000 | 0.05s |
+| test (100,101,102) | DiffCovModel | 0.257 | 0.197 | **0.144** | **0.215** | 0.03s |
+| test (100,101,102) | MeanDifferenceModel | 0.257 | 0.000 | 0.131 | 0.000 | 0.01s |
+
+DiffCov clearly beats both baselines on both metrics on both splits. Hidden recall 0.17 on train is modest (PI family reaches 0.57, NR family 0.74), but this is iter 20's *starting point* for the new family. The direction-weighting scheme (currently a simple shift/β asymmetry ratio) is the obvious weak link and the next iteration target.
+
+**Verdict**: **KEPT** as DC family's iter-20 baseline.
