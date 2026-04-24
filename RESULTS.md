@@ -50,6 +50,10 @@ Each family is evaluated against MD + Random (universal baselines) and its own p
 - precision@k: **0.157** (train) / 0.164 (test) — iter 27: 0.149/0.145; iter 28: 0.156/0.159; iter 29: 0.157/0.164; beats MD baseline (+23% train, +25% test)
 - hidden-source recall: **0.514** (train) / 0.515 (test) — iter 27: 0.336/0.271; iter 28: 0.500/0.449; iter 29: 0.514/0.515; beats MD baseline
 
+**RA family** (`RankAggregationModel`, iter 31+, currently at iter 31):
+- precision@k: **0.165** (train) / 0.172 (test) — beats MD baseline (+29% train, +31% test); best test precision across all families
+- hidden-source recall: **0.634** (train) / 0.650 (test) — beats MD baseline
+
 W1 sanity floor (for any family): must stay above `RandomBaseline`'s 0.2457 on train / 0.2309 on test.
 
 ## Iteration log
@@ -829,3 +833,33 @@ Several DT variants tried vs iter 29; none cleared both splits.
 | median/max/q90 rescale of β_iv | 0.154 | 0.478 | 0.164 | 0.515 (train regresses) |
 
 DT family saturates at precision ~0.157, hidden ~0.515 on train. The dominator-tree core is discrete so many continuous-style tweaks are no-ops; the few that do change numbers trade precision for hidden recall without a Pareto win.
+
+### Iteration 31 — RankAggregationModel (new family: rank-percentile ensemble)
+
+**Hypothesis**: the four in-tree families (NR, PI, DC, DT) each have distinct inductive biases — observational precision matrix, total-effect matrix inversion, differential covariance, and dominator-tree structural identification. They fail in different ways on the same edges. Rank-aggregation averages their rank-percentiles, and edges that many families rank highly are more likely to be true edges than those favoured by only one family.
+
+**Change**: new `grn_inference/rank_aggregation/RankAggregationModel`. Runs all four families at the same `top_k`, converts each ranked list to rank-percentiles `(n - rank)/n ∈ (0, 1]`, sums percentiles per edge, returns top-`k` by sum.
+
+**Variants tested** (train seeds 0,1,2):
+
+| ensemble | train prec | train hidden | test prec | test hidden |
+|----------|----------:|-------------:|---------:|------------:|
+| all four | 0.165 | 0.634 | 0.172 | 0.650 |
+| NR + PI | 0.161 | 0.641 | 0.167 | 0.649 |
+| NR + DC + DT | 0.164 | 0.632 | 0.166 | 0.608 |
+| all four, NR weight 2× | 0.163 | 0.648 | 0.169 | 0.654 |
+
+All-four equal is the default. NR-heavy slightly bumps hidden at the cost of precision.
+
+**Numbers (top_k=1000)**:
+
+| split | method | mean W1 | FOR | precision@k | hidden recall |
+|-------|--------|---------|-----|-------------|---------------|
+| train (0,1,2) | RankAggregationModel | — | — | **0.165** | **0.634** |
+| train (0,1,2) | MeanDifferenceModel (baseline) | 0.274 | 0.000 | 0.128 | 0.000 |
+| test (100,101,102) | RankAggregationModel | — | — | **0.172** | **0.650** |
+| test (100,101,102) | MeanDifferenceModel | 0.257 | 0.000 | 0.131 | 0.000 |
+
+RA beats MD +29%/+30% precision on train/test; hidden recall goes from 0 → 0.634/0.650. Best test precision across all five families.
+
+**Verdict**: **KEPT** as RA family's iter-31 baseline.

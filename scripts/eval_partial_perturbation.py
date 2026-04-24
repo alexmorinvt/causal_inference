@@ -40,6 +40,7 @@ from grn_inference import (
     NeighborhoodRegressionModel,
     PathInversionModel,
     RandomBaseline,
+    RankAggregationModel,
     evaluate_statistical,
     make_synthetic_dataset,
 )
@@ -60,6 +61,7 @@ def build_methods(top_k: int, fit_seed: int = 0):
         "PathInversionModel": lambda: PathInversionModel(top_k=top_k),
         "DiffCovModel": lambda: DiffCovModel(top_k=top_k),
         "DominatorTreeModel": lambda: DominatorTreeModel(top_k=top_k),
+        "RankAggregationModel": lambda: RankAggregationModel(top_k=top_k),
     }
 
 
