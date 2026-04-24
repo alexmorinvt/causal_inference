@@ -1066,3 +1066,20 @@ Tried ICP variants to push past iter 35:
 | LASSO per-arm β (α ∈ {0.01, 0.05, 0.1}) | seed-0 prec 0.143–0.145, hidden 0.67–0.77; 10× slower than ridge; not clearly better |
 
 No code change. ICP saturated at iter 35.
+
+### Iteration 40 — cross-family compositions (exploratory, no new family)
+
+Tried two composition recipes combining the strongest families:
+
+**a) ICP-then-PI** — use ICP's mean-|β| matrix as ``T`` in PI's ``W = T(I+T)⁻¹`` inversion. Sweeping spectral ∈ {0.3, 0.5, 0.7}: all three give train prec 0.144–0.146 / hidden 0.707–0.737 and test prec 0.146–0.147 / hidden 0.718–0.762. Tiny precision gain over pure ICP (iter 35) at meaningful hidden-recall cost. Not a beat.
+
+**b) ICP × NR rank-percentile product** — run both families at ``top_k=2450``, combine by ``pct_ICP^a × pct_NR^b``:
+
+| a, b | train prec | train hidden | test prec | test hidden |
+|------|----------:|-------------:|---------:|------------:|
+| 1, 1 | 0.160 | 0.394 | 0.160 | 0.367 |
+| 2, 1 | **0.167** | 0.563 | 0.165 | 0.509 |
+| 1, 2 | 0.153 | 0.257 | 0.155 | 0.241 |
+| 1.5, 1.5 | 0.160 | 0.394 | 0.160 | 0.367 |
+
+`icp^2 × nr^1` has highest train precision of any method on this branch (0.167) but hidden recall is middling (0.563). Not a clean Pareto win — RA still beats on test precision and ICP beats on hidden. Logging the observation without forking a new module (the composition doesn't add a genuinely new identifiability argument).
