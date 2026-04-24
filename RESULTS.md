@@ -54,6 +54,10 @@ Each family is evaluated against MD + Random (universal baselines) and its own p
 - precision@k: **0.165** (train) / 0.172 (test) — beats MD baseline (+29% train, +31% test); best test precision across all families
 - hidden-source recall: **0.634** (train) / 0.650 (test) — beats MD baseline
 
+**ICP family** (`InvarianceICPModel`, iter 34+, currently at iter 34):
+- precision@k: **0.136** (train) / 0.142 (test) — beats MD baseline (+6% train, +8% test)
+- hidden-source recall: **0.757** (train) / 0.770 (test) — **best hidden recall across all families** (beats NR's 0.736/0.675)
+
 W1 sanity floor (for any family): must stay above `RandomBaseline`'s 0.2457 on train / 0.2309 on test.
 
 ## Iteration log
@@ -913,3 +917,42 @@ Pareto frontier:
 - **Balance**: RA is strictly competitive on both metrics on test.
 
 All five families improve dramatically over MD + Random. Progress from MD baseline (train 0.128 prec, 0 hidden recall) to RA iter 31 (0.165 prec, 0.634 hidden recall): **+29% precision on train, +31% on test, hidden recall from 0 to 0.634 train / 0.650 test**.
+
+### Iteration 34 — InvarianceICPModel (new family: invariant causal prediction)
+
+**Hypothesis**: Peters-Bühlmann-Meinshausen (2016) ICP argument. A true direct edge `S → T` implies the regression of `x_T` on `x_S` is invariant across interventional environments: the pairwise OLS coefficient `β_arm[T, S]` should be statistically indistinguishable across arms where neither `S` nor `T` is the pinned gene. Confounded edges (where a third variable causes both) break invariance under interventions on that third variable. This identifiability argument is orthogonal to NR's precision-matrix one — it needs many environments and fails without them, while NR needs Gaussian noise and linearity.
+
+**Change**: new `grn_inference/invariance_icp/InvarianceICPModel`.
+
+Computation per edge `(S, T)`:
+1. For each arm ∈ `{control} ∪ {do(G) : G ≠ S, G ≠ T}`, compute per-arm `β_arm[T, S] = Cov(x_S, x_T | arm) / Var(x_S | arm)`.
+2. Aggregate by `mean|β_arm|` across usable arms.
+3. Multiply by `|shift[S, T]|^0.5` for perturbed-source edges.
+
+Vectorised: the A arm-covariances are stacked once, then β is computed jointly as `cov_stack[a, t, s] / var_stack[a, s]` with the pinning-arm mask applied via NaN.
+
+**Train sweeps**:
+- `score_mode ∈ {snr, mean_abs, median_abs, min_abs, mean_over_cv}`: `mean_abs` is best (SNR is too conservative).
+- `shift_boost_power ∈ {0, 0.5, 1, 2}`:
+
+| power | train prec | train hidden | test prec | test hidden |
+|------:|----------:|-------------:|---------:|------------:|
+| 0.0 | 0.123 | 0.454 | 0.132 | 0.470 |
+| **0.5** | **0.136** | **0.757** | **0.142** | **0.770** |
+| 1.0 | 0.131 | 0.843 | 0.133 | 0.839 |
+| 2.0 | 0.126 | 0.878 | 0.125 | 0.861 |
+
+Picked `shift_boost_power = 0.5` — best precision × hidden tradeoff; beats MD baseline on both splits.
+
+**Numbers (top_k=1000)**:
+
+| split | method | mean W1 | FOR | precision@k | hidden recall |
+|-------|--------|---------|-----|-------------|---------------|
+| train (0,1,2) | InvarianceICPModel | 0.451 | 0.311 | **0.136** | **0.757** |
+| train (0,1,2) | MeanDifferenceModel (baseline) | 0.274 | 0.000 | 0.128 | 0.000 |
+| test (100,101,102) | InvarianceICPModel | 0.414 | 0.279 | **0.142** | **0.770** |
+| test (100,101,102) | MeanDifferenceModel | 0.257 | 0.000 | 0.131 | 0.000 |
+
+ICP beats MD baseline on both metrics on both splits (+6%/+8% precision, 0 → 0.77 hidden recall). **Highest hidden-source recall of any family** — beats NR's iter-13 record (0.736 train, 0.675 test).
+
+**Verdict**: **KEPT** as ICP family's iter-34 baseline. Theoretically orthogonal to NR's identifiability argument, and empirically unlocks a higher hidden-recall ceiling.

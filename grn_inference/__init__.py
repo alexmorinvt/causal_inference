@@ -11,6 +11,7 @@ from .dominator_tree import DominatorTreeModel
 from .ensemble_scm import EnsembleSCMFitter
 from .evaluator import StatisticalResult, evaluate_statistical
 from .indirect_pruning import IndirectPruningModel
+from .invariance_icp import InvarianceICPModel
 from .models import MeanDifferenceModel, Model, RandomBaseline
 from .neighborhood_regression import NeighborhoodRegressionModel
 from .path_inversion import PathInversionModel
@@ -25,6 +26,7 @@ __all__ = [
     "DominatorTreeModel",
     "EnsembleSCMFitter",
     "IndirectPruningModel",
+    "InvarianceICPModel",
     "MeanDifferenceModel",
     "Model",
     "NeighborhoodRegressionModel",

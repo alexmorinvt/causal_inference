@@ -36,6 +36,7 @@ from scipy.stats import wasserstein_distance
 from grn_inference import (
     DiffCovModel,
     DominatorTreeModel,
+    InvarianceICPModel,
     MeanDifferenceModel,
     NeighborhoodRegressionModel,
     PathInversionModel,
@@ -62,6 +63,7 @@ def build_methods(top_k: int, fit_seed: int = 0):
         "DiffCovModel": lambda: DiffCovModel(top_k=top_k),
         "DominatorTreeModel": lambda: DominatorTreeModel(top_k=top_k),
         "RankAggregationModel": lambda: RankAggregationModel(top_k=top_k),
+        "InvarianceICPModel": lambda: InvarianceICPModel(top_k=top_k),
     }
 
 
