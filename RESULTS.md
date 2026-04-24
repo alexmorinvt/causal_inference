@@ -174,3 +174,30 @@ Precision +2.8% train / +1.3% test. Hidden-source recall **unchanged** on both s
 Train: precision +6.2%, hidden recall +16.6%. Test: precision +2.5%, hidden recall +6.5%. Every seed × metric improves; no regression. Runtime unchanged.
 
 **Verdict**: **KEPT**. Largest single-iteration jump on hidden recall so far (0.40 → 0.47 on train, 0.43 → 0.46 on test). The β-asymmetry direction signal is a genuine identifiability result in the isotropic-noise linear SCM, so this is a principled gain rather than a tuning artefact.
+
+### Iteration 7 — shift-asymmetry direction filter on perturbed-perturbed pairs (reverted)
+
+**Hypothesis**: mirror iter 6's direction filter on the perturbed bucket using the classical do-calculus asymmetry test. For a pair `(A, B)` both perturbed, if `A → B` is real then `|shift[A,B]| >> |shift[B,A]|` (intervention on `A` propagates to `B`; intervention on `B` does not propagate back under forbid_two_cycles). Keep only the larger-shift direction.
+
+**Change**: added `direction_from_shift_asymmetry: bool = True` to `NeighborhoodRegressionModel`.
+
+**Numbers (top_k=1000, train)**:
+
+| method | mean W1 | FOR | precision@k | hidden recall |
+|--------|---------|-----|-------------|---------------|
+| NR + shift-asym filter | 0.3756 | 0.070 | 0.153 | 0.467 |
+| NR (iter 6, prev best) | 0.3836 | 0.034 | 0.155 | 0.467 |
+
+Precision −1.3%, FOR doubled, hidden recall unchanged (expected: the filter only affects perturbed bucket, which has no hidden-source edges by construction).
+
+**Tuning pass** (seeds 0,1,2):
+
+| config | precision@k | hidden recall |
+|--------|------------:|--------------:|
+| shift-asym + corr_weight=1.0 (default) | 0.153 | 0.467 |
+| shift-asym + corr_weight=0.0 (raw shifts) | 0.151 | 0.467 |
+| iter 6 baseline (no shift-asym) | 0.155 | 0.467 |
+
+Neither variant beats iter 6. The do-calculus direction test is the classical tool but **fails under moderate cyclicity**: at `rho(W) = 0.8` a true edge `S → T` has non-trivial `shift[T, S]` through longer cycles `S → T → ... → S`, so the asymmetry flip-flops on some true edges and the filter zeroes the correct direction. β-asymmetry (iter 6) works on the unperturbed bucket precisely because it encodes the cycle-inclusive observational structure via Θ, not the cycle-severing interventional structure.
+
+**Verdict**: **REVERTED**. Shift-asymmetry is right for DAGs and wrong for cyclic SCMs; iter 6's β-asymmetry is the cycle-robust counterpart.
