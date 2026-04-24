@@ -154,6 +154,24 @@ class NeighborhoodRegressionModel:
     bootstrap_seed
         Seed for the bootstrap resampling RNG. Fixed default of ``0``
         so the ranker is deterministic.
+    iv_score_weight
+        Multiplicative boost on the unperturbed-source bucket from an
+        IV-style cross-arm regression of shifts. For perturbed gene
+        ``G`` and any gene ``X``, ``shift[G, X]`` is the total causal
+        effect of ``G`` on ``X``. For a candidate edge ``S -> T``,
+        regressing ``shift[G, T]`` on ``shift[G, S]`` across all
+        perturbed ``G`` gives
+
+            β_iv[S, T] = ⟨s_S, s_T⟩ / ⟨s_S, s_S⟩    (s_X = shift[pert, X])
+
+        which, under a linear-SCM cascade ``G -> S -> T``, concentrates
+        around the direct edge weight ``W[T, S]``. This is the
+        interventional-data analog of the precision-based ``|β|``:
+        signal from perturbed ancestors of ``S`` is propagated to any
+        downstream candidate ``T``, so we get direct-effect information
+        even when ``S`` itself is unperturbed. Multiplied in as
+        ``(1 + w_iv * |β_iv[S, T]|)``. Default ``20`` selected by a
+        train-seed sweep; saturates past ``w_iv ≈ 20``.
     """
 
     top_k: int = 1000
@@ -164,6 +182,7 @@ class NeighborhoodRegressionModel:
     direction_from_beta_asymmetry: bool = True
     n_bootstrap: int = 10
     bootstrap_seed: int = 0
+    iv_score_weight: float = 20.0
 
     def _estimate_beta_abs(self, ctrl_expr: np.ndarray, G: int) -> np.ndarray:
         """Estimate ``|β|`` from control cells.
@@ -253,8 +272,27 @@ class NeighborhoodRegressionModel:
 
         # ---- Bucket edges by source perturbation status ---------------
         pert_mask = np.zeros(G, dtype=bool)
+        pert_idx_list: list[int] = []
         for g in perturbed_set:
-            pert_mask[data.gene_idx(g)] = True
+            i = data.gene_idx(g)
+            pert_mask[i] = True
+            pert_idx_list.append(i)
+
+        # ---- IV-style cross-arm shift regression -----------------------
+        # For each pair (s, t), β_iv[s, t] = regression of shift[G, t] on
+        # shift[G, s] across perturbed G; estimates direct effect
+        # W[t, s] under a linear-SCM cascade. See class docstring.
+        if self.iv_score_weight > 0.0 and pert_idx_list:
+            pert_idx = np.asarray(pert_idx_list)
+            S_mat = shift[pert_idx, :]  # (n_pert, G)
+            cross = S_mat.T @ S_mat
+            diag_denom = np.diag(cross).copy()
+            diag_denom = np.where(diag_denom > 1e-12, diag_denom, 1.0)
+            beta_iv = cross / diag_denom[:, None]
+            np.fill_diagonal(beta_iv, 0.0)
+            iv_score = np.abs(beta_iv).astype(np.float32)
+        else:
+            iv_score = None
 
         # Optional direction-disambiguation multiplier: for candidate
         # (S unperturbed, T perturbed), multiply |beta[T, S]| by
@@ -306,6 +344,8 @@ class NeighborhoodRegressionModel:
                     # and the damping factor is 1 anyway.
                     if sc > 0.0 and damping is not None and pert_mask[t]:
                         sc *= float(damping[s, t])
+                    if sc > 0.0 and iv_score is not None:
+                        sc *= 1.0 + self.iv_score_weight * float(iv_score[s, t])
                     if sc > 0.0:
                         unpert_scores.append((sc, s, t))
 

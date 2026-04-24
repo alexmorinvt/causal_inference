@@ -28,10 +28,10 @@ Sanity floor: mean W1 on evaluable edges must not drop below `RandomBaseline`'s 
 | MeanDifferenceModel | 0.2571  | 0.000 | 0.131       | 0.000                | 0.01s        |
 | RandomBaseline      | 0.2309  | 0.357 | 0.118       | 0.000                | 0.08s        |
 
-### Current best (on train) — the bar iteration 12 must beat
+### Current best (on train) — the bar iteration 14 must beat
 
-- **precision@k**: `NeighborhoodRegressionModel` + bootstrap β averaging at **0.162** (was 0.160 iter 8, 0.155 iter 6, 0.146 iter 5, 0.128 MD).
-- **hidden-source recall**: same method at **0.718** (was 0.703 iter 8, 0.467 iter 6, 0.401 iter 5).
+- **precision@k**: `NeighborhoodRegressionModel` + IV-style cross-arm shift regression at **0.164** (was 0.162 iter 11, 0.160 iter 8, 0.155 iter 6, 0.128 MD).
+- **hidden-source recall**: same method at **0.736** (was 0.718 iter 11, 0.703 iter 8, 0.467 iter 6).
 - W1 sanity floor: must stay above `RandomBaseline`'s 0.2457.
 
 ## Iteration log
@@ -329,3 +329,36 @@ Several small NR extensions were tried against iter 11; none cleared both the "b
 | hard reverse-shift threshold q=0.85 | 0.1623 | 0.7209 | noise-level |
 
 No code change committed. The NR family appears saturated on this benchmark at roughly `precision@k ≈ 0.162`, `hidden-source recall ≈ 0.72` on train. Further gains likely require a pivot to a different estimator family (moment-matching via covariance discrepancy, IV-style direction disambiguation, or score-matching on interventional densities).
+
+### Iteration 13 — IV-style cross-arm shift regression
+
+**Hypothesis**: the reverse-shift damping (iter 2) uses `shift[T, S]` only as a *negative* signal (damp `(S, T)` when `T` is a causal ancestor of `S`). But the full shift matrix has positive directional information too: for each perturbed gene `G` and any gene `X`, `shift[G, X]` measures `G`'s total effect on `X`. Under a linear-SCM cascade `G → S → T`, we have `shift[G, T] ≈ shift[G, S] · W[T, S]`; so regressing `shift[G, T]` on `shift[G, S]` across perturbed `G` gives an estimate of `W[T, S]` — a direct causal effect estimator for candidate edge `S → T` that does not require intervening on `S`. This is an instrumental-variables argument using the perturbed ancestors of `S` as instruments for `S`'s variation.
+
+**Change**: added `iv_score_weight: float = 20.0`. For each pair `(s, t)`, compute `β_iv[s, t] = ⟨shift_pert[:, s], shift_pert[:, t]⟩ / ⟨shift_pert[:, s], shift_pert[:, s]⟩` (inner products restricted to perturbed-source rows of the shift matrix). Multiply the unperturbed-bucket score by `(1 + w_iv · |β_iv[s, t]|)`.
+
+**Train sweep** (seeds 0, 1, 2):
+
+| `iv_score_weight` | train prec | train hidden | test prec | test hidden |
+|------------------:|-----------:|-------------:|----------:|------------:|
+| 0.0 (iter 11) | 0.1620 | 0.7180 | 0.1603 | 0.6557 |
+| 1.0 | 0.1633 | 0.7279 | 0.1617 | 0.6652 |
+| 5.0 | 0.1640 | 0.7329 | 0.1623 | 0.6703 |
+| 10.0 | 0.1640 | 0.7331 | 0.1627 | 0.6726 |
+| **20.0** | **0.1643** | **0.7356** | **0.1630** | **0.6748** |
+| 50.0 | 0.1643 | 0.7356 | 0.1630 | 0.6748 |
+| 100.0 | 0.1640 | 0.7333 | 0.1630 | 0.6748 |
+
+Peak at `w=20`; saturates past 50. Picked 20 for the smaller-magnitude principled default.
+
+**Numbers at `iv_score_weight=20` (top_k=1000)**:
+
+| split | method | mean W1 | FOR | precision@k | hidden recall | runtime/seed |
+|-------|--------|---------|-----|-------------|---------------|--------------|
+| train (0,1,2) | NR + IV boost | 0.4890 | 0.209 | **0.164** | **0.736** | 0.02s |
+| train (0,1,2) | NR (iter 11, prev best) | 0.4890 | 0.208 | 0.162 | 0.718 | 0.02s |
+| test (100,101,102) | NR + IV boost | 0.4537 | 0.165 | **0.163** | **0.675** | 0.02s |
+| test (100,101,102) | NR (iter 11) | 0.4537 | 0.173 | 0.160 | 0.656 | 0.02s |
+
+All four deltas positive: train +1.4%/+2.5%, test +1.7%/+2.9%. Test numbers within 10% of train (precision gap 0.8%, hidden gap 8.3%).
+
+**Verdict**: **KEPT**. The IV regression uses perturbed genes as natural instruments for upstream (unperturbed) sources — theoretically principled under linear SCM cascades, and empirically the iter-12 saturation was worth pivoting through.
