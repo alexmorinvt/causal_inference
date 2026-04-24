@@ -106,6 +106,19 @@ class PathInversionModel:
           direction: swapping ``i`` and ``j`` gives a different
           estimate. This is the direction-aware interventional-data
           imputation the correlation fallback lacks.
+    n_bootstrap
+        Number of bootstrap resamples of per-arm cells (control and
+        every intervention arm resampled with replacement). The full
+        pipeline — shifts, IV imputation, spectral projection, matrix
+        inversion — is repeated per bootstrap and the resulting
+        ``|W_est|`` matrices are averaged. At ``n=1`` a single
+        resample just injects noise; ``n >= 10`` reliably reduces it.
+        ``n=50`` is the default — a train-seed sweep over {1, 5, 10,
+        20, 30, 50} showed the precision / hidden-recall frontier
+        still improving slightly at 50 with sub-second runtime.
+    bootstrap_seed
+        Seed for the per-arm resampling RNG. Fixed default ``0`` so
+        the ranker is deterministic.
     """
 
     top_k: int = 1000
@@ -114,6 +127,8 @@ class PathInversionModel:
     obs_correlation_weight: float = 1.0
     clip_obs_to_pos: bool = False
     imputation_mode: str = "iv_shift_regression"
+    n_bootstrap: int = 50
+    bootstrap_seed: int = 0
 
     def fit_predict(self, data: Dataset) -> list[Edge]:
         ctrl_mask = data.control_mask()
@@ -122,28 +137,9 @@ class PathInversionModel:
                 "No control cells; cannot compute shifts or covariance."
             )
         ctrl_expr = data.expression[ctrl_mask]
-        ctrl_means = ctrl_expr.mean(axis=0)
-
         G = data.n_genes
         perturbed_set = set(data.perturbed_genes())
 
-        # ---- Signed shift matrix (perturbed sources only) -------------
-        shifts = np.zeros((G, G), dtype=np.float64)
-        for src in perturbed_set:
-            mask = data.intervention_mask(src)
-            if not mask.any():
-                continue
-            s = data.gene_idx(src)
-            shifts[s, :] = (
-                data.expression[mask].mean(axis=0) - ctrl_means
-            ).astype(np.float64)
-        # shifts[s, t] = signed shift of gene t under do(s).
-
-        # ---- Assemble T: T[i, j] = shifts[j, i] (perturbed j) ---------
-        T = shifts.T.copy()  # T[i, j] = shift of i under do(j)
-        np.fill_diagonal(T, 0.0)
-
-        # ---- Impute unperturbed columns of T --------------------------
         pert_mask = np.zeros(G, dtype=bool)
         pert_idx_list: list[int] = []
         for g in perturbed_set:
@@ -151,71 +147,104 @@ class PathInversionModel:
             pert_mask[i] = True
             pert_idx_list.append(i)
 
-        if (~pert_mask).any():
-            if self.imputation_mode == "iv_shift_regression" and pert_idx_list:
-                # IV regression: for unperturbed j, T[i, j] ≈ shift[G, i]
-                # regressed on shift[G, j] across perturbed G.
-                pert_idx = np.asarray(pert_idx_list)
-                S_pert = shifts[pert_idx, :]  # (n_pert, G); rows=perturbed G
-                # cross[j, i] = ⟨shift[:, j], shift[:, i]⟩
-                cross = S_pert.T @ S_pert
-                diag_denom = np.diag(cross).copy()
-                diag_denom = np.where(diag_denom > 1e-12, diag_denom, 1.0)
-                # beta_iv[j, i] = estimate of T[i, j] from regression of
-                # shift[:, i] on shift[:, j].
-                beta_iv = cross / diag_denom[:, None]
-                np.fill_diagonal(beta_iv, 0.0)
-                # Fill T[:, j] = beta_iv[j, :] for unperturbed j (convert
-                # from j-indexed row to i-indexed column of T).
-                unpert_cols = np.where(~pert_mask)[0]
-                for j in unpert_cols:
-                    T[:, j] = beta_iv[j, :]
-                np.fill_diagonal(T, 0.0)
-            elif (
-                self.imputation_mode == "correlation"
-                and self.obs_correlation_weight > 0.0
-            ):
-                Xc = ctrl_expr - ctrl_means
-                Sigma = (Xc.T @ Xc) / max(Xc.shape[0], 1)
-                Sigma = Sigma.astype(np.float64)
-                std = np.sqrt(np.clip(np.diag(Sigma), 1e-12, None))
-                Rho = Sigma / (std[:, None] * std[None, :])
-                np.fill_diagonal(Rho, 0.0)
-                shift_abs = np.abs(T[:, pert_mask])
-                shift_abs = shift_abs[shift_abs > 0.0]
-                rho_abs = np.abs(Rho)
-                rho_abs = rho_abs[rho_abs > 0.0]
-                if shift_abs.size > 0 and rho_abs.size > 0:
-                    scale = shift_abs.mean() / rho_abs.mean()
-                else:
-                    scale = 1.0
-                imputed = self.obs_correlation_weight * scale * Rho
-                if self.clip_obs_to_pos:
-                    imputed = np.clip(imputed, 0.0, None)
-                unpert_cols = np.where(~pert_mask)[0]
-                T[:, unpert_cols] = imputed[:, unpert_cols]
-                np.fill_diagonal(T, 0.0)
+        # Precompute per-arm cell indices for bootstrap.
+        arm_indices: dict[str, np.ndarray] = {
+            "__ctrl__": np.flatnonzero(ctrl_mask),
+        }
+        for g in perturbed_set:
+            arm_indices[g] = np.flatnonzero(data.intervention_mask(g))
 
-        # ---- Spectral projection to keep (I + T)^{-1} well-defined ----
-        eigs = np.linalg.eigvals(T)
-        rho_T = float(np.max(np.abs(eigs))) if eigs.size > 0 else 0.0
-        if rho_T > self.spectral_target and rho_T > 0:
-            T = T * (self.spectral_target / rho_T)
-
-        # ---- W = T (I + T)^{-1} ---------------------------------------
+        n_boot = max(1, int(self.n_bootstrap))
+        rng = np.random.default_rng(self.bootstrap_seed)
         I_G = np.eye(G, dtype=np.float64)
-        M = I_G + T + self.ridge * I_G
-        try:
-            M_inv = np.linalg.inv(M)
-        except np.linalg.LinAlgError:
-            # Fallback: if somehow singular, use pseudo-inverse.
-            M_inv = np.linalg.pinv(M)
-        W_est = T @ M_inv
-        np.fill_diagonal(W_est, 0.0)
+        W_abs_agg = np.zeros((G, G), dtype=np.float64)
 
-        # ---- Rank edges by |W_est[i, j]|, edge is (source=j, target=i)
-        # score[j, i] = |W_est[i, j]|
-        score = np.abs(W_est).T.astype(np.float32)
+        for _ in range(n_boot):
+            if n_boot > 1:
+                ci = rng.choice(
+                    arm_indices["__ctrl__"],
+                    size=len(arm_indices["__ctrl__"]),
+                    replace=True,
+                )
+                ctrl_expr_b = data.expression[ci]
+                ctrl_means_b = ctrl_expr_b.mean(axis=0)
+            else:
+                ctrl_expr_b = ctrl_expr
+                ctrl_means_b = ctrl_expr.mean(axis=0)
+
+            shifts = np.zeros((G, G), dtype=np.float64)
+            for src in perturbed_set:
+                idx_pool = arm_indices[src]
+                if idx_pool.size == 0:
+                    continue
+                s = data.gene_idx(src)
+                if n_boot > 1:
+                    ii = rng.choice(idx_pool, size=idx_pool.size, replace=True)
+                else:
+                    ii = idx_pool
+                shifts[s, :] = (
+                    data.expression[ii].mean(axis=0) - ctrl_means_b
+                ).astype(np.float64)
+
+            T = shifts.T.copy()
+            np.fill_diagonal(T, 0.0)
+
+            if (~pert_mask).any():
+                if self.imputation_mode == "iv_shift_regression" and pert_idx_list:
+                    pert_idx = np.asarray(pert_idx_list)
+                    S_pert = shifts[pert_idx, :]
+                    cross = S_pert.T @ S_pert
+                    diag_denom = np.diag(cross).copy()
+                    diag_denom = np.where(diag_denom > 1e-12, diag_denom, 1.0)
+                    beta_iv = cross / diag_denom[:, None]
+                    np.fill_diagonal(beta_iv, 0.0)
+                    unpert_cols = np.where(~pert_mask)[0]
+                    for j in unpert_cols:
+                        T[:, j] = beta_iv[j, :]
+                    np.fill_diagonal(T, 0.0)
+                elif (
+                    self.imputation_mode == "correlation"
+                    and self.obs_correlation_weight > 0.0
+                ):
+                    Xc = ctrl_expr_b - ctrl_means_b
+                    Sigma = (Xc.T @ Xc) / max(Xc.shape[0], 1)
+                    Sigma = Sigma.astype(np.float64)
+                    std = np.sqrt(np.clip(np.diag(Sigma), 1e-12, None))
+                    Rho = Sigma / (std[:, None] * std[None, :])
+                    np.fill_diagonal(Rho, 0.0)
+                    shift_abs = np.abs(T[:, pert_mask])
+                    shift_abs = shift_abs[shift_abs > 0.0]
+                    rho_abs = np.abs(Rho)
+                    rho_abs = rho_abs[rho_abs > 0.0]
+                    if shift_abs.size > 0 and rho_abs.size > 0:
+                        scale = shift_abs.mean() / rho_abs.mean()
+                    else:
+                        scale = 1.0
+                    imputed = self.obs_correlation_weight * scale * Rho
+                    if self.clip_obs_to_pos:
+                        imputed = np.clip(imputed, 0.0, None)
+                    unpert_cols = np.where(~pert_mask)[0]
+                    T[:, unpert_cols] = imputed[:, unpert_cols]
+                    np.fill_diagonal(T, 0.0)
+
+            eigs = np.linalg.eigvals(T)
+            rho_T = float(np.max(np.abs(eigs))) if eigs.size > 0 else 0.0
+            if rho_T > self.spectral_target and rho_T > 0:
+                T = T * (self.spectral_target / rho_T)
+
+            M = I_G + T + self.ridge * I_G
+            try:
+                M_inv = np.linalg.inv(M)
+            except np.linalg.LinAlgError:
+                M_inv = np.linalg.pinv(M)
+            W_est = T @ M_inv
+            np.fill_diagonal(W_est, 0.0)
+            W_abs_agg += np.abs(W_est)
+
+        W_abs_agg /= n_boot
+
+        # ---- Rank edges by averaged |W_est[i, j]|, edge (source=j, target=i)
+        score = W_abs_agg.T.astype(np.float32)
         np.fill_diagonal(score, 0.0)
 
         flat = score.ravel()

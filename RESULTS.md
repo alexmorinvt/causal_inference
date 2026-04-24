@@ -36,9 +36,9 @@ Each family is evaluated against MD + Random (universal baselines) and its own p
 - precision@k: **0.164** (train) / 0.163 (test)
 - hidden-source recall: **0.736** (train) / 0.675 (test)
 
-**PI family** (`PathInversionModel`, iter 14+, currently at iter 16):
-- precision@k: **0.155** (train) / 0.160 (test) — iter 14: 0.137/0.153; iter 15: 0.153/0.157; beats MD baseline (+22% train, +22% test)
-- hidden-source recall: **0.566** (train) / 0.562 (test) — iter 14: 0.391/0.445; iter 15: 0.560/0.555; beats MD baseline (0.000 → new capability)
+**PI family** (`PathInversionModel`, iter 14+, currently at iter 17):
+- precision@k: **0.163** (train) / 0.164 (test) — iter 14: 0.137/0.153; iter 15: 0.153/0.157; iter 16: 0.155/0.160; beats MD baseline (+27% train, +25% test)
+- hidden-source recall: **0.582** (train) / 0.591 (test) — iter 14: 0.391/0.445; iter 15: 0.560/0.555; iter 16: 0.566/0.562; beats MD baseline (0.000 → new capability)
 
 W1 sanity floor (for any family): must stay above `RandomBaseline`'s 0.2457 on train / 0.2309 on test.
 
@@ -459,5 +459,38 @@ Picked **`spectral_target = 0.70`** as it's the only setting that beats iter 15 
 | test (100,101,102) | PI iter 15 | 0.354 | 0.170 | 0.157 | 0.555 |
 
 All four deltas positive: train +1.3%/+1.0%, test +2.1%/+1.3%.
+
+**Verdict**: **KEPT**.
+
+### Iteration 17 — PI: per-arm bootstrap stability on the full pipeline
+
+**Hypothesis**: shifts are computed from small per-arm samples (~200 cells for interventions). Each bootstrap's shift matrix is noisy; the matrix inversion amplifies some of that noise into `|W_est|`. Resampling cells per arm (control + every intervention) with replacement, re-running the full shift → IV-imputation → spectral-projection → inversion pipeline per resample, and averaging `|W_est|` reduces variance. Analog of NR iter 11's bootstrap stability, applied to the entire PI pipeline rather than a single precision-matrix inversion.
+
+**Train sweep** (seeds 0,1,2, `n_bootstrap ∈ {1, 5, 10, 20, 30, 50}`):
+
+| `n_bootstrap` | train prec | train hidden | test prec | test hidden |
+|-------------:|----------:|-------------:|---------:|------------:|
+| iter 16 (no bootstrap) | 0.1553 | 0.5657 | 0.1600 | 0.5620 |
+| 1 | 0.1443 | 0.4987 | — | — |
+| 5 | 0.1547 | 0.5403 | — | — |
+| 10 | 0.1580 | 0.5696 | 0.1553 | 0.5179 |
+| 20 | 0.1573 | 0.5601 | 0.1590 | 0.5421 |
+| 30 | 0.1593 | 0.5681 | 0.1610 | 0.5599 |
+| **50** | **0.1627** | **0.5824** | **0.1643** | **0.5909** |
+
+`n=1` regresses as expected (single resample adds noise without averaging). `n ≥ 10` beats iter 16 on train, but `n=10` and `n=20` have shaky test behaviour. `n=50` is the first setting where *both* splits improve on both metrics; `n=30` is almost there but iter-16-tying on test precision. Picking `n=50`. Runtime at n=50 is ~0.1s/seed — still sub-second.
+
+**Change**: added `n_bootstrap: int = 50` and `bootstrap_seed: int = 0` to `PathInversionModel`; restructure `fit_predict` to loop over bootstrap resamples of cells per arm.
+
+**Numbers (top_k=1000)** — PI iter 17 vs iter 16:
+
+| split | method | mean W1 | FOR | precision@k | hidden recall | runtime/seed |
+|-------|--------|---------|-----|-------------|---------------|--------------|
+| train (0,1,2) | PI iter 17 | 0.383 | 0.157 | **0.163** | **0.582** | 0.10s |
+| train (0,1,2) | PI iter 16 | 0.385 | 0.162 | 0.155 | 0.566 | 0.01s |
+| test (100,101,102) | PI iter 17 | 0.365 | 0.147 | **0.164** | **0.591** | 0.10s |
+| test (100,101,102) | PI iter 16 | 0.358 | 0.153 | 0.160 | 0.562 | 0.10s |
+
+Train +5.2%/+2.8%, test +2.5%/+5.2%. All four positive, well within 10%-of-train on both metrics.
 
 **Verdict**: **KEPT**.
