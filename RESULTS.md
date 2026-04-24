@@ -46,9 +46,9 @@ Each family is evaluated against MD + Random (universal baselines) and its own p
 - precision@k: **0.145** (train) / 0.142 (test) — iter 20–25 progression: 0.135/0.144 → 0.136/0.145 → 0.137/0.141 → 0.139/0.141 → 0.140/0.140 → 0.145/0.142; beats MD baseline (+13% train, +8% test)
 - hidden-source recall: **0.632** (train) / 0.611 (test) — iter 20–25 progression: 0.17 → 0.19 → 0.29 → 0.34 → 0.38 → 0.63; beats MD baseline; biggest single-iter jump at iter 25 (+65%)
 
-**DT family** (`DominatorTreeModel`, iter 27+, currently at iter 28):
-- precision@k: **0.156** (train) / 0.159 (test) — iter 27: 0.149/0.145; beats MD baseline (+22% train, +21% test)
-- hidden-source recall: **0.500** (train) / 0.449 (test) — iter 27: 0.336/0.271; beats MD baseline (0.000 → new capability)
+**DT family** (`DominatorTreeModel`, iter 27+, currently at iter 29):
+- precision@k: **0.157** (train) / 0.164 (test) — iter 27: 0.149/0.145; iter 28: 0.156/0.159; iter 29: 0.157/0.164; beats MD baseline (+23% train, +25% test)
+- hidden-source recall: **0.514** (train) / 0.515 (test) — iter 27: 0.336/0.271; iter 28: 0.500/0.449; iter 29: 0.514/0.515; beats MD baseline
 
 W1 sanity floor (for any family): must stay above `RandomBaseline`'s 0.2457 on train / 0.2309 on test.
 
@@ -793,5 +793,24 @@ Monotone up to q=0.94, saturates past. Picked `q=0.94`.
 | test (100,101,102) | DT iter 27 | 0.277 | 0.173 | 0.145 | 0.271 |
 
 Train +4.7%/+49%, test +9.7%/+66%. All four positive, test stronger than train. FOR drops from ~0.17 to ~0.03 — the sparser graph excludes many noise-level shift entries from the top_k tail, so the omission-sample-pool gets much cleaner.
+
+**Verdict**: **KEPT**.
+
+### Iteration 29 — DT: use all genes (incl. unperturbed) as dominator-tree roots
+
+**Hypothesis**: iter 27/28 only rooted dominator trees at *perturbed* genes. Unperturbed genes have IV-imputed edge-weight rows, so they are valid sources in the sparse graph — using them as additional dominator-tree roots contributes more votes, especially for edges into unperturbed targets and for hidden-source edges in general.
+
+**Change**: added `use_all_genes_as_roots: bool = True`. When `True`, compute dominator trees rooted at every gene (not just perturbed). Doubles the number of trees from 25 to 50 on the benchmark config.
+
+**Numbers (top_k=1000)** vs iter 28:
+
+| split | method | mean W1 | FOR | precision@k | hidden recall |
+|-------|--------|---------|-----|-------------|---------------|
+| train (0,1,2) | DT iter 29 | 0.389 | 0.044 | **0.157** | **0.514** |
+| train (0,1,2) | DT iter 28 | 0.385 | 0.033 | 0.156 | 0.500 |
+| test (100,101,102) | DT iter 29 | 0.358 | 0.053 | **0.164** | **0.515** |
+| test (100,101,102) | DT iter 28 | 0.348 | 0.030 | 0.159 | 0.449 |
+
+Train +0.5%/+2.9%, test +2.7%/+14.7%.
 
 **Verdict**: **KEPT**.

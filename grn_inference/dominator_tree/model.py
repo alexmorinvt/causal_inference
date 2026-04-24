@@ -84,12 +84,19 @@ class DominatorTreeModel:
         ``|β_iv|`` for unperturbed) over edges not already selected.
         Dominator trees produce only O(G) edges per source root, so
         this is usually necessary to reach ``top_k = 1000``.
+    use_all_genes_as_roots
+        If ``True``, compute dominator trees rooted at *every* gene,
+        not just the perturbed ones. Unperturbed roots rely on the
+        IV-imputed edge_weight rows; each extra root contributes more
+        dominator-tree votes, mostly improving hidden-source recall.
+        If ``False``, only perturbed genes are roots (iter-27 default).
     """
 
     top_k: int = 1000
     shift_quantile: float = 0.94
     weight_by_edge_magnitude: bool = True
     fill_tail_with_shift: bool = True
+    use_all_genes_as_roots: bool = True
 
     def fit_predict(self, data: Dataset) -> list[Edge]:
         ctrl_mask = data.control_mask()
@@ -164,8 +171,11 @@ class DominatorTreeModel:
 
         # ---- Per-source dominator tree votes -------------------------
         score = np.zeros((G, G), dtype=np.float64)
-        for g in perturbed_genes_sorted:
-            root = data.gene_idx(g)
+        if self.use_all_genes_as_roots:
+            root_indices = list(range(G))
+        else:
+            root_indices = [data.gene_idx(g) for g in perturbed_genes_sorted]
+        for root in root_indices:
             if root not in graph:
                 continue
             try:
@@ -178,7 +188,7 @@ class DominatorTreeModel:
                 if v == root:
                     continue
                 if self.weight_by_edge_magnitude:
-                    w = edge_weight[u, v]
+                    w = float(edge_weight[u, v])
                 else:
                     w = 1.0
                 score[u, v] += w
