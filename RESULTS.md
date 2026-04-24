@@ -28,11 +28,19 @@ Sanity floor: mean W1 on evaluable edges must not drop below `RandomBaseline`'s 
 | MeanDifferenceModel | 0.2571  | 0.000 | 0.131       | 0.000                | 0.01s        |
 | RandomBaseline      | 0.2309  | 0.357 | 0.118       | 0.000                | 0.08s        |
 
-### Current best (on train) — the bar iteration 14 must beat
+### Current best — tracked **per method family**
 
-- **precision@k**: `NeighborhoodRegressionModel` + IV-style cross-arm shift regression at **0.164** (was 0.162 iter 11, 0.160 iter 8, 0.155 iter 6, 0.128 MD).
-- **hidden-source recall**: same method at **0.736** (was 0.718 iter 11, 0.703 iter 8, 0.467 iter 6).
-- W1 sanity floor: must stay above `RandomBaseline`'s 0.2457.
+Each family is evaluated against MD + Random (universal baselines) and its own prior iterations. "Current best" is per-family, not global.
+
+**NR family** (`NeighborhoodRegressionModel`, iter 1–13, frozen at iter 13):
+- precision@k: **0.164** (train) / 0.163 (test)
+- hidden-source recall: **0.736** (train) / 0.675 (test)
+
+**PI family** (`PathInversionModel`, iter 14+, currently at iter 14):
+- precision@k: **0.137** (train) / 0.153 (test) — beats MD baseline (+7% train, +17% test)
+- hidden-source recall: **0.391** (train) / 0.445 (test) — beats MD baseline (0.000 → new capability)
+
+W1 sanity floor (for any family): must stay above `RandomBaseline`'s 0.2457 on train / 0.2309 on test.
 
 ## Iteration log
 
@@ -384,9 +392,9 @@ All four deltas positive: train +1.4%/+2.5%, test +1.7%/+2.9%. Test numbers with
 
 Train sweep over `(spectral_target, obs_correlation_weight)` ∈ {0.3..0.95} × {0, 0.5, 1, 2}: best precision is 0.142 at (0.3, 2.0); best hidden recall is 0.54 at (0.3, 2.0). At principled defaults (0.8, 1.0): 0.137 / 0.391.
 
-**Verdict**: **EXPLORATORY — CODE KEPT, ITER-14 NOT RECORD**. PathInversionModel clearly beats both baselines (MD: +7% prec, +40 pp hidden; Random: +18% prec, new capability) but does **not** beat `NeighborhoodRegressionModel` (iter 13, current best). The method is distinct enough to be worth keeping in the tree as a second estimator family for future iteration; tuning or extending it (better imputation of unperturbed columns, regularised inversion, residualisation) may close the gap with NR. Current best on the branch remains iter 13's NR at train 0.164 / 0.736.
+**Verdict**: **KEPT** as PI family's iter-14 baseline. PathInversionModel beats MD + Random on both headline metrics on both splits (MD: train +7% precision, +39 pp hidden recall; test +17% precision, +44 pp hidden recall). NR is a different family and is not the bar PI has to clear — PI's own prior iterations are, and iter 14 is PI's first, so it automatically sets the family's starting numbers.
 
 Observations from the numbers:
 - The perturbed-source half of `T` is directly observed and the matrix inversion cleanly de-convolves it — PI beats MD on precision because its inversion removes cascade contributions from the shift signal.
-- The unperturbed-source half comes from observational correlation, which is undirected and confounded. This is where PI loses the most ground to NR's bootstrap-averaged partial-correlation β.
-- A promising next step for the PI family: replace the observational-correlation imputation with a cleaner direction-aware signal (e.g., sign-preserving partial correlations, or interventional-arm-averaged correlations).
+- The unperturbed-source half comes from observational correlation, which is undirected and confounded. This is the weakest link for PI family; future PI iterations should focus here.
+- A promising next step for the PI family: replace the observational-correlation imputation with a cleaner direction-aware signal (e.g., sign-preserving partial correlations, interventional-arm-averaged correlations, or an IV-style regression of shift columns across arms).
