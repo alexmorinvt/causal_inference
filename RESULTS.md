@@ -515,3 +515,26 @@ Train +5.2%/+2.8%, test +2.5%/+5.2%. All four positive, well within 10%-of-train
 Still cleanly beats iter 16: train +3.2%/+0.4%, test +3.1%/+3.6%. The originally-logged iter 17 numbers (0.163/0.582 train, 0.164/0.591 test) happened to come from a favourable hash ordering; the reproducible baseline is slightly different but still a win.
 
 **Verdict**: **KEPT**. Reproducibility matters — hyperparameter sweeps give meaningless noise if runs drift by the same order-of-magnitude as the tuning signal.
+
+### Iteration 19 — PI-family saturation checkpoint (no commit)
+
+Ran several small PI variants vs iter 18 with deterministic numbers; none cleared both the "beats train" and "holds on test" bars.
+
+| attempt | train prec | train hidden | test prec | test hidden | verdict |
+|---------|-----------:|-------------:|----------:|------------:|---------|
+| iter 18 baseline | 0.1600 | 0.5675 | 0.1647 | 0.5818 | — |
+| ridge 1e-2 | 0.1607 | 0.5700 | 0.1643 | 0.5795 | tie train, test regresses |
+| ridge 1e-1 | 0.1607 | 0.5725 | 0.1640 | 0.5722 | test regresses |
+| spectral_target=0.65 | 0.1607 | 0.5700 | 0.1637 | 0.5722 | test regresses |
+| spectral_target=0.75 | 0.1600 | 0.5722 | 0.1643 | 0.5867 | test prec regresses |
+| multi-round IV (n=2) | 0.1370 | 0.3426 | 0.1530 | 0.4082 | big regress |
+| multi-round IV (n=3) | 0.1517 | 0.4432 | 0.1600 | 0.4567 | regress |
+| truncated Neumann n_terms=3 | 0.1587 | 0.5574 | 0.1600 | 0.5618 | regress |
+| truncated Neumann n_terms=5 | 0.1573 | 0.5601 | 0.1647 | 0.5728 | train regresses |
+| β-asymmetry direction filter on output | 0.1583 | 0.5284 | 0.1593 | 0.5179 | big regress |
+| column-normalize T before inversion | 0.1537 | 0.4921 | 0.1560 | 0.5261 | regress |
+| MD-shift hybrid for perturbed rows | 0.1537 | 0.5335 | 0.1647 | 0.5520 | train regresses |
+| no inversion (raw T) | 0.1550 | 0.5306 | 0.1650 | 0.5212 | hidden regresses |
+| mix obs correlation into perturbed T cols (α=0.9) | 0.1580 | 0.5847 | 0.1590 | 0.5798 | test prec regresses |
+
+No code change committed. PI family appears saturated at `precision@k ≈ 0.160`, `hidden-source recall ≈ 0.568` on train with the current matrix-inversion + IV-imputation + bootstrap pipeline.
