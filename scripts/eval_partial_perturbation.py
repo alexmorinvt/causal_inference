@@ -10,27 +10,48 @@ Reports, per top_k:
 - mean W1 (CausalBench's statistical metric),
 - **precision@k** — what fraction of the method's top_k is a real edge,
   broken down by whether the source is perturbed,
+- **hidden-source recall** — fraction of true edges whose source is
+  unperturbed that the method recovered in its top_k,
 - FOR (false-omission rate).
 
 Also reports a **matched-W1** pivot: for a target mean-W1 threshold,
 find the largest prefix of each method's ranking whose cumulative mean
 W1 stays above that target, and compare precisions at that point.
+
+At the end, emits a single-line ``JSON_SUMMARY = {...}`` block on stdout
+with per-seed and seed-mean numbers for every in-tree method at
+``top_k=1000``, so downstream tooling can ingest results without
+re-parsing the human-readable tables.
 """
 
 from __future__ import annotations
 
+import argparse
+import json
 import time
 
 import numpy as np
 from scipy.stats import wasserstein_distance
 
 from grn_inference import (
-    EnsembleSCMFitter,
     MeanDifferenceModel,
     RandomBaseline,
     evaluate_statistical,
     make_synthetic_dataset,
 )
+
+
+# Methods included in the JSON summary block. The default set is just the
+# baselines — MD + Random. New methods under iteration should be added to
+# this dict explicitly by the iteration that introduces them. Oracle is
+# printed in the per-seed tables but excluded from the summary (it reads
+# ground truth). Each entry is a zero-arg factory that returns a fresh
+# instance bound to ``top_k``.
+def build_methods(top_k: int, fit_seed: int = 0):
+    return {
+        "MeanDifferenceModel": lambda: MeanDifferenceModel(top_k=top_k),
+        "RandomBaseline": lambda: RandomBaseline(top_k=top_k, seed=fit_seed),
+    }
 
 
 def oracle_sorted_edges(data) -> list[tuple[tuple[str, str], float]]:
@@ -73,7 +94,13 @@ def cumulative_mean_w1(
     return cum
 
 
-def main() -> None:
+def run_one_seed(seed: int, *, headline_top_k: int = 1000) -> dict:
+    """Run every method once on the synthetic data at ``seed``.
+
+    Returns a dict keyed by method name with headline metrics plus the
+    raw per-edge W1 map and ranked edges so the caller can reuse them
+    for the human-readable tables without re-running the methods.
+    """
     n_genes = 50
     n_perturbed_genes = n_genes // 2  # only half the genes get intervention arms
     data, truth = make_synthetic_dataset(
@@ -82,13 +109,16 @@ def main() -> None:
         n_control_cells=2000,
         n_cells_per_perturbation=200,
         n_perturbed_genes=n_perturbed_genes,
-        seed=7,
+        seed=seed,
     )
     perturbed_set = set(data.perturbed_genes())
     true_set = set(truth.true_edges)
     true_edges_with_perturbed_src = {e for e in true_set if e[0] in perturbed_set}
     true_edges_with_unperturbed_src = true_set - true_edges_with_perturbed_src
 
+    print(f"\n{'#' * 78}")
+    print(f"# SEED = {seed}")
+    print(f"{'#' * 78}")
     print(f"{data.summary()}")
     print(f"n_genes={n_genes}, n_perturbed={n_perturbed_genes}")
     print(f"True edges total:                   {len(true_set)}")
@@ -106,34 +136,34 @@ def main() -> None:
     )
 
     # --------------------------------------------------------------------
-    # Run each method at a large top_k; slice down for finer comparisons.
+    # Run each in-tree method at ``headline_top_k`` once; slice down
+    # later for finer comparisons.
     # --------------------------------------------------------------------
-    max_k = 1000
+    max_k = headline_top_k
     print(f"\nFitting models (top_k={max_k})...")
-    t0 = time.time()
-    fitter = EnsembleSCMFitter(
-        top_k=max_k, n_candidates=5, n_steps=1000,
-        step_size=0.01, batch_size=200, l1_lambda=1e-4,
-        seed=0, log_every=None,
-    )
-    fit_edges = fitter.fit_predict(data)
-    print(f"  EnsembleSCMFitter: {time.time() - t0:.2f}s")
+    factories = build_methods(max_k)
+    method_edges: dict[str, list] = {}
+    method_runtime: dict[str, float] = {}
+    for name, factory in factories.items():
+        t0 = time.time()
+        model = factory()
+        edges = model.fit_predict(data)
+        dt = time.time() - t0
+        method_edges[name] = edges
+        method_runtime[name] = dt
+        print(f"  {name:<22} {dt:>8.2f}s")
 
-    md_edges = MeanDifferenceModel(top_k=max_k).fit_predict(data)
-    rb_edges = RandomBaseline(top_k=max_k, seed=0).fit_predict(data)
     oracle_edges = [e for e, _ in oracle[:max_k]]
 
-    methods = {
+    # Display order: oracle diagnostic first, then in-tree methods.
+    display_methods = {
         "Oracle (W1 sorted)": oracle_edges,
-        "EnsembleSCMFitter": fit_edges,
-        "Mean Difference":   md_edges,
-        "Random":            rb_edges,
+        **method_edges,
     }
 
-    # Evaluate at large top_k once per method to get per_edge_w1 maps;
-    # reuse for cumulative analysis.
+    # Cache per_edge_w1 maps at max_k for cumulative analysis.
     per_edge_maps: dict[str, dict] = {}
-    for name, edges in methods.items():
+    for name, edges in display_methods.items():
         res = evaluate_statistical(
             edges, data, omission_sample_size=500,
             rng=np.random.default_rng(99),
@@ -141,40 +171,55 @@ def main() -> None:
         per_edge_maps[name] = res.per_edge_wasserstein
 
     # --------------------------------------------------------------------
-    # Per-top_k table: mean W1, precision@k, FOR, source breakdown.
+    # Per-top_k table: mean W1, precision@k, FOR, source breakdown,
+    # hidden-source recall.
     # --------------------------------------------------------------------
+    headline: dict[str, dict] = {}
     for top_k in (50, 100, 500, 1000):
         print(f"\n--- top_k = {top_k} ---")
         header = (
             f"{'method':<22} {'mean W1':>10} "
             f"{'prec@k':>8} {'prec (pert)':>12} {'prec (unpert)':>14} "
+            f"{'hidden rec':>11} "
             f"{'FOR':>8} {'# pert':>8} {'# unpert':>10}"
         )
         print(header)
         print("-" * len(header))
-        for name, edges in methods.items():
+        for name, edges in display_methods.items():
             edges_k = edges[:top_k]
             res = evaluate_statistical(
                 edges_k, data, omission_sample_size=500,
                 rng=np.random.default_rng(99),
             )
             n_pert = sum(1 for s, _ in edges_k if s in perturbed_set)
-            n_unpert = top_k - n_pert
+            n_unpert = len(edges_k) - n_pert
             hits = sum(1 for e in edges_k if e in true_set)
             hits_pert = sum(
                 1 for e in edges_k
                 if e in true_set and e[0] in perturbed_set
             )
             hits_unpert = hits - hits_pert
-            prec = hits / top_k
+            prec = hits / max(len(edges_k), 1)
             prec_pert = hits_pert / max(n_pert, 1)
             prec_unpert = hits_unpert / max(n_unpert, 1)
+            hidden_recall = (
+                hits_unpert / max(len(true_edges_with_unperturbed_src), 1)
+            )
             print(
                 f"{name:<22} {res.mean_wasserstein:>10.4f} "
                 f"{prec:>8.3f} {prec_pert:>12.3f} {prec_unpert:>14.3f} "
+                f"{hidden_recall:>11.3f} "
                 f"{res.false_omission_rate:>8.3f} "
                 f"{n_pert:>8d} {n_unpert:>10d}"
             )
+            if top_k == headline_top_k and name in method_edges:
+                headline[name] = {
+                    "mean_w1": float(res.mean_wasserstein),
+                    "for": float(res.false_omission_rate),
+                    "precision_at_k": float(prec),
+                    "hidden_source_recall": float(hidden_recall),
+                    "runtime_s": float(method_runtime[name]),
+                }
 
     # --------------------------------------------------------------------
     # Matched-W1 pivot: longest prefix with cumulative mean W1 >= target.
@@ -190,7 +235,7 @@ def main() -> None:
     )
     print(header)
     print("-" * len(header))
-    for name, edges in methods.items():
+    for name, edges in display_methods.items():
         cum = cumulative_mean_w1(edges, per_edge_maps[name])
         for target in targets:
             valid = cum >= target
@@ -210,6 +255,89 @@ def main() -> None:
                 f"{cum[k_star - 1]:>10.4f} {prec:>10.3f} "
                 f"{hits:>12d} {hits_unpert:>14d}"
             )
+
+    return headline
+
+
+def emit_json_summary(per_seed: dict[int, dict]) -> None:
+    """Print a single-line JSON block with per-seed and seed-mean metrics.
+
+    The block is emitted on its own ``JSON_SUMMARY = {...}`` line so
+    downstream tools can regex-match it out of mixed stdout.
+    """
+    # Collate into {method: {"per_seed": {seed: {...}}, "mean": {...}}}
+    methods = set()
+    for seed_result in per_seed.values():
+        methods.update(seed_result.keys())
+
+    summary = {}
+    for m in sorted(methods):
+        per_seed_m = {}
+        keys = ("mean_w1", "for", "precision_at_k", "hidden_source_recall", "runtime_s")
+        for seed, seed_result in per_seed.items():
+            if m in seed_result:
+                per_seed_m[str(seed)] = seed_result[m]
+        mean_m = {}
+        for k in keys:
+            vals = [v[k] for v in per_seed_m.values() if k in v]
+            mean_m[k] = float(np.mean(vals)) if vals else None
+        summary[m] = {"per_seed": per_seed_m, "mean": mean_m}
+
+    summary["_seeds"] = sorted(per_seed.keys())
+
+    # Single-line, machine-parseable.
+    print()
+    print("JSON_SUMMARY = " + json.dumps(summary, separators=(",", ":")))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--seeds", type=int, nargs="+", default=[7],
+        help="One or more data seeds to run (default: 7).",
+    )
+    parser.add_argument(
+        "--top-k", type=int, default=1000,
+        help="Headline top_k for the JSON summary (default: 1000).",
+    )
+    args = parser.parse_args()
+
+    per_seed: dict[int, dict] = {}
+    for seed in args.seeds:
+        per_seed[seed] = run_one_seed(seed, headline_top_k=args.top_k)
+
+    # --------------------------------------------------------------------
+    # Cross-seed aggregate: for each in-tree method, print seed-means at
+    # top_k so the headline numbers are easy to eyeball.
+    # --------------------------------------------------------------------
+    if len(args.seeds) > 1:
+        print("\n" + "#" * 78)
+        print(f"# CROSS-SEED MEAN (top_k={args.top_k}, seeds={args.seeds})")
+        print("#" * 78)
+        header = (
+            f"{'method':<22} {'mean W1':>10} {'FOR':>8} "
+            f"{'prec@k':>8} {'hidden rec':>11} {'runtime':>10}"
+        )
+        print(header)
+        print("-" * len(header))
+        methods = set()
+        for r in per_seed.values():
+            methods.update(r.keys())
+        for m in sorted(methods):
+            vals = [per_seed[s].get(m) for s in args.seeds if m in per_seed[s]]
+            if not vals:
+                continue
+            mw1 = float(np.mean([v["mean_w1"] for v in vals]))
+            mfor = float(np.mean([v["for"] for v in vals]))
+            mprec = float(np.mean([v["precision_at_k"] for v in vals]))
+            mhr = float(np.mean([v["hidden_source_recall"] for v in vals]))
+            mrt = float(np.mean([v["runtime_s"] for v in vals]))
+            print(
+                f"{m:<22} {mw1:>10.4f} {mfor:>8.3f} "
+                f"{mprec:>8.3f} {mhr:>11.3f} {mrt:>10.2f}s"
+            )
+
+    emit_json_summary(per_seed)
 
 
 if __name__ == "__main__":
