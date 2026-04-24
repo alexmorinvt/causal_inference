@@ -46,9 +46,9 @@ Each family is evaluated against MD + Random (universal baselines) and its own p
 - precision@k: **0.145** (train) / 0.142 (test) — iter 20–25 progression: 0.135/0.144 → 0.136/0.145 → 0.137/0.141 → 0.139/0.141 → 0.140/0.140 → 0.145/0.142; beats MD baseline (+13% train, +8% test)
 - hidden-source recall: **0.632** (train) / 0.611 (test) — iter 20–25 progression: 0.17 → 0.19 → 0.29 → 0.34 → 0.38 → 0.63; beats MD baseline; biggest single-iter jump at iter 25 (+65%)
 
-**DT family** (`DominatorTreeModel`, iter 27+, currently at iter 27):
-- precision@k: **0.149** (train) / 0.145 (test) — beats MD baseline (+16% train, +11% test)
-- hidden-source recall: **0.336** (train) / 0.271 (test) — beats MD baseline (0.000 → new capability)
+**DT family** (`DominatorTreeModel`, iter 27+, currently at iter 28):
+- precision@k: **0.156** (train) / 0.159 (test) — iter 27: 0.149/0.145; beats MD baseline (+22% train, +21% test)
+- hidden-source recall: **0.500** (train) / 0.449 (test) — iter 27: 0.336/0.271; beats MD baseline (0.000 → new capability)
 
 W1 sanity floor (for any family): must stay above `RandomBaseline`'s 0.2457 on train / 0.2309 on test.
 
@@ -762,3 +762,36 @@ Algorithm:
 Beats MD on both metrics on both splits (+16%/−/+11%/+27 pp). Mean W1 above Random's floor on both splits.
 
 **Verdict**: **KEPT** as DT family iter-27 baseline.
+
+### Iteration 28 — DT: retune `shift_quantile` with tail-fill in place
+
+**Hypothesis**: iter 27's q=0.90 was picked before the tail-fill path was wired in. With shift-ranked tail now providing coverage, a sparser graph (higher q) may surface cleaner dominator-tree pairs without sacrificing top_k coverage.
+
+**Train sweep**:
+
+| q | train prec | train hidden | test prec | test hidden |
+|--:|----------:|-------------:|---------:|------------:|
+| 0.80 | 0.126 | 0.008 | 0.131 | 0.019 |
+| 0.85 | 0.131 | 0.075 | 0.129 | 0.036 |
+| 0.88 | 0.141 | 0.188 | 0.141 | 0.188 |
+| 0.90 (iter 27) | 0.149 | 0.336 | 0.145 | 0.271 |
+| 0.92 | 0.155 | 0.441 | 0.159 | 0.413 |
+| **0.94** | **0.156** | **0.500** | **0.159** | **0.449** |
+| 0.96 | 0.155 | 0.502 | 0.159 | 0.458 |
+
+Monotone up to q=0.94, saturates past. Picked `q=0.94`.
+
+**Change**: `shift_quantile` 0.90 → 0.94.
+
+**Numbers (top_k=1000)** vs iter 27:
+
+| split | method | mean W1 | FOR | precision@k | hidden recall |
+|-------|--------|---------|-----|-------------|---------------|
+| train (0,1,2) | DT iter 28 | 0.385 | 0.033 | **0.156** | **0.500** |
+| train (0,1,2) | DT iter 27 | 0.317 | 0.153 | 0.149 | 0.336 |
+| test (100,101,102) | DT iter 28 | 0.348 | 0.030 | **0.159** | **0.449** |
+| test (100,101,102) | DT iter 27 | 0.277 | 0.173 | 0.145 | 0.271 |
+
+Train +4.7%/+49%, test +9.7%/+66%. All four positive, test stronger than train. FOR drops from ~0.17 to ~0.03 — the sparser graph excludes many noise-level shift entries from the top_k tail, so the omission-sample-pool gets much cleaner.
+
+**Verdict**: **KEPT**.

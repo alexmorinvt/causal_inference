@@ -66,9 +66,12 @@ class DominatorTreeModel:
         quantile of the non-zero weights. Higher = sparser graph, so
         dominator trees bottleneck through fewer intermediate nodes
         and the resulting immediate-dominator pairs are more
-        discriminating. ``0.90`` selected by train sweep — at q=0.95
-        the graph is too sparse (few edges emit) and at q=0.5 the
-        graph is too dense (dominators collapse to the root).
+        discriminating. ``0.94`` selected by train sweep — at q <= 0.88
+        the graph is too dense (dominators collapse to the root); at
+        q >= 0.94 the graph is sparse enough that dominator trees are
+        meaningful and together with shift-tail fill produce a good
+        precision × hidden-recall tradeoff. Past 0.94 precision holds
+        but hidden recall saturates.
     weight_by_edge_magnitude
         If ``True``, vote weight is ``|edge_weight|`` — the actual
         shift/β_iv magnitude — so that strong edges contribute more
@@ -84,7 +87,7 @@ class DominatorTreeModel:
     """
 
     top_k: int = 1000
-    shift_quantile: float = 0.90
+    shift_quantile: float = 0.94
     weight_by_edge_magnitude: bool = True
     fill_tail_with_shift: bool = True
 
