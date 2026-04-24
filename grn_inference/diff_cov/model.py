@@ -64,13 +64,22 @@ class DiffCovModel:
         covariance becomes too noisy below ~20 cells per arm).
     observational_ridge
         Ridge regulariser on the precision-matrix diagonal, used only
-        for the unperturbed-unperturbed direction fallback. Value
-        inherited from `NeighborhoodRegressionModel` defaults.
+        for the unperturbed-unperturbed direction fallback.
+    diff_power
+        Element-wise exponent applied to ``|Σ_ctrl − Σ_G|`` before
+        averaging across arms; after the mean, the reciprocal exponent
+        un-does the scaling. ``1.0`` = plain mean of absolute diffs.
+        ``< 1`` (default ``0.5``, i.e. mean of sqrt) downweights
+        single-arm outliers and rewards consistency across arms — an
+        edge with moderate diff across many arms beats an edge with
+        one arm's outlier-large diff. ``> 1`` amplifies single-arm
+        peaks. Sweep on train picked 0.5.
     """
 
     top_k: int = 1000
     min_cells_per_arm: int = 20
     observational_ridge: float = 1e-4
+    diff_power: float = 0.5
 
     def fit_predict(self, data: Dataset) -> list[Edge]:
         ctrl_mask = data.control_mask()
@@ -96,6 +105,7 @@ class DiffCovModel:
         # ---- Per-arm covariances + diff-cov aggregation ---------------
         diff_score = np.zeros((G, G), dtype=np.float64)
         n_valid_arms = 0
+        p = float(self.diff_power)
         for g in perturbed_genes_sorted:
             mask = data.intervention_mask(g)
             if mask.sum() < self.min_cells_per_arm:
@@ -107,10 +117,12 @@ class DiffCovModel:
                 arm_centered.shape[0], 1
             )
             np.fill_diagonal(Sigma_g, 0.0)
-            diff_score += np.abs(Sigma_ctrl - Sigma_g)
+            diff_score += np.abs(Sigma_ctrl - Sigma_g) ** p
             n_valid_arms += 1
         if n_valid_arms > 0:
             diff_score /= n_valid_arms
+        if p != 1.0:
+            diff_score = diff_score ** (1.0 / p)
 
         # ---- Direction weights ----------------------------------------
         # shifts[j, i] = mean(x_i | do(j)) - mean(x_i | control).

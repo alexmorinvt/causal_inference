@@ -42,9 +42,9 @@ Each family is evaluated against MD + Random (universal baselines) and its own p
 
 *Note*: iter 17 was originally logged with slightly higher numbers (0.163/0.582 train, 0.164/0.591 test); iter 18 fixed non-deterministic `perturbed_set` iteration (which caused bootstrap draw ordering to depend on Python hash randomization), giving reproducible numbers that are very slightly lower on train but equal-or-better on test.
 
-**DC family** (`DiffCovModel`, iter 20+, currently at iter 20):
-- precision@k: **0.135** (train) / 0.144 (test) — beats MD baseline (+5.5% train, +9.9% test)
-- hidden-source recall: **0.170** (train) / 0.215 (test) — beats MD baseline (0.000 → new capability)
+**DC family** (`DiffCovModel`, iter 20+, currently at iter 21):
+- precision@k: **0.136** (train) / 0.145 (test) — iter 20: 0.135/0.144; beats MD baseline (+7% train, +11% test)
+- hidden-source recall: **0.186** (train) / 0.220 (test) — iter 20: 0.170/0.215; beats MD baseline (0.000 → new capability)
 
 W1 sanity floor (for any family): must stay above `RandomBaseline`'s 0.2457 on train / 0.2309 on test.
 
@@ -566,3 +566,24 @@ No code change committed. PI family appears saturated at `precision@k ≈ 0.160`
 DiffCov clearly beats both baselines on both metrics on both splits. Hidden recall 0.17 on train is modest (PI family reaches 0.57, NR family 0.74), but this is iter 20's *starting point* for the new family. The direction-weighting scheme (currently a simple shift/β asymmetry ratio) is the obvious weak link and the next iteration target.
 
 **Verdict**: **KEPT** as DC family's iter-20 baseline.
+
+### Iteration 21 — DC: square-root mean of diffs (`diff_power=0.5`)
+
+**Hypothesis**: the iter-20 mean-of-absolute-diffs favours edges where a single arm has a very large diff, even if the remaining arms show weak diffs — this captures outlier interventions rather than consistent network participation. Taking the mean of `|Σ_ctrl - Σ_G|^p` with `p < 1` (raising to 1/p after averaging), the mean is concave in the underlying diff magnitudes: an edge with moderate diffs across many arms beats one with a single-arm outlier. This is the classical robust-statistic move from Lᵖ norms with `p < 1`.
+
+**Train sweep** `diff_power ∈ {0.5, 1.0, 2.0, 3.0}`: `p=0.5` is the only setting beating iter 20 on both metrics on both splits.
+
+**Change**: added `diff_power: float = 0.5` to `DiffCovModel`.
+
+**Numbers (top_k=1000)**:
+
+| split | method | mean W1 | FOR | precision@k | hidden recall |
+|-------|--------|---------|-----|-------------|---------------|
+| train (0,1,2) | DC iter 21 (`diff_power=0.5`) | 0.279 | 0.204 | **0.136** | **0.186** |
+| train (0,1,2) | DC iter 20 (`diff_power=1.0`, prev best) | 0.279 | 0.198 | 0.135 | 0.170 |
+| test (100,101,102) | DC iter 21 | 0.258 | 0.194 | **0.145** | **0.220** |
+| test (100,101,102) | DC iter 20 | 0.257 | 0.197 | 0.144 | 0.215 |
+
+Train +0.7%/+9.4%, test +0.7%/+2.3%. All four positive.
+
+**Verdict**: **KEPT**.
