@@ -42,9 +42,9 @@ Each family is evaluated against MD + Random (universal baselines) and its own p
 
 *Note*: iter 17 was originally logged with slightly higher numbers (0.163/0.582 train, 0.164/0.591 test); iter 18 fixed non-deterministic `perturbed_set` iteration (which caused bootstrap draw ordering to depend on Python hash randomization), giving reproducible numbers that are very slightly lower on train but equal-or-better on test.
 
-**DC family** (`DiffCovModel`, iter 20+, currently at iter 21):
-- precision@k: **0.136** (train) / 0.145 (test) — iter 20: 0.135/0.144; beats MD baseline (+7% train, +11% test)
-- hidden-source recall: **0.186** (train) / 0.220 (test) — iter 20: 0.170/0.215; beats MD baseline (0.000 → new capability)
+**DC family** (`DiffCovModel`, iter 20+, currently at iter 22):
+- precision@k: **0.137** (train) / 0.141 (test) — iter 20: 0.135/0.144; iter 21: 0.136/0.145; beats MD baseline (+7% train, +8% test)
+- hidden-source recall: **0.293** (train) / 0.313 (test) — iter 20: 0.170/0.215; iter 21: 0.186/0.220; beats MD baseline (0.000 → new capability, big iter-22 jump)
 
 W1 sanity floor (for any family): must stay above `RandomBaseline`'s 0.2457 on train / 0.2309 on test.
 
@@ -587,3 +587,37 @@ DiffCov clearly beats both baselines on both metrics on both splits. Hidden reca
 Train +0.7%/+9.4%, test +0.7%/+2.3%. All four positive.
 
 **Verdict**: **KEPT**.
+
+### Iteration 22 — DC: continuous direction weight for unperturbed-perturbed pairs
+
+**Hypothesis**: iter 20/21 used a crude discrete direction rule — for candidate `(j unpert, i pert)`, direction_weight was 0.2 if `|shift[i, j]| > 0` (any reverse evidence), else 0.8. This threshold-at-zero discards informative magnitude. Replace with a smooth exponential: `direction_weight[j, i] = exp(-|shift[i, j]| / scale)`. Large reverse-shift ⇒ small weight; no reverse-shift ⇒ weight 1. Sweep on train picks `scale = 0.30`.
+
+**Train sweep** `exp_scale ∈ {0.03, 0.05, 0.07, 0.10, 0.15, 0.20, 0.30, 0.50, 1.0, 2.0, 5.0}`:
+
+| scale | train prec | train hidden | test prec | test hidden |
+|------:|----------:|-------------:|---------:|------------:|
+| iter 21 (discrete) | 0.136 | 0.186 | 0.145 | 0.220 |
+| 0.03 | 0.138 | 0.216 | 0.143 | 0.225 |
+| 0.10 | 0.137 | 0.241 | 0.143 | 0.258 |
+| 0.20 | 0.138 | 0.261 | 0.141 | 0.285 |
+| **0.30** | **0.137** | **0.293** | **0.141** | **0.313** |
+| 0.50 | 0.132 | 0.304 | 0.141 | 0.354 |
+| 1.00 | 0.130 | 0.326 | 0.142 | 0.419 |
+| 2.00 | 0.133 | 0.370 | 0.138 | 0.429 |
+
+Beyond `scale = 0.30` train precision starts dropping below iter 21. Picked 0.30 for the largest hidden-recall gain that still beats iter 21 on train precision.
+
+**Change**: added `unpert_pert_direction_scale: float = 0.30`. Replaced the discrete 0.2/0.8 rule with `exp(-|shift[i, j]| / scale)`.
+
+**Numbers (top_k=1000)**:
+
+| split | method | mean W1 | FOR | precision@k | hidden recall |
+|-------|--------|---------|-----|-------------|---------------|
+| train (0,1,2) | DC iter 22 | 0.283 | 0.253 | **0.137** | **0.293** |
+| train (0,1,2) | DC iter 21 | 0.279 | 0.204 | 0.136 | 0.186 |
+| test (100,101,102) | DC iter 22 | 0.261 | 0.242 | 0.141 | **0.313** |
+| test (100,101,102) | DC iter 21 | 0.258 | 0.194 | 0.145 | 0.220 |
+
+Train +0.7%/+57%. Test precision regresses slightly vs iter 21 (0.145 → 0.141, −2.8%), but still within 10% of train precision (train 0.137 / test 0.141, +3% gap). Test hidden recall +42%. Per skill rule (beats train + holds test within tolerance), commits cleanly.
+
+**Verdict**: **KEPT**. Biggest single-iteration hidden-recall jump in the DC family.

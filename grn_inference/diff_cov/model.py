@@ -74,12 +74,25 @@ class DiffCovModel:
         edge with moderate diff across many arms beats an edge with
         one arm's outlier-large diff. ``> 1`` amplifies single-arm
         peaks. Sweep on train picked 0.5.
+    unpert_pert_direction_scale
+        For candidate edges ``(j, i)`` with ``j`` unperturbed and ``i``
+        perturbed, the direction weight is
+        ``exp(-|shift[i, j]| / scale)``. A large reverse-shift
+        ``|shift[i, j]|`` is evidence that ``i`` is a causal ancestor
+        of ``j`` (i.e. the reverse direction ``i -> j`` is more
+        plausible), so the weight for the candidate ``j -> i`` is
+        downweighted smoothly rather than pinned to a discrete
+        0.2/0.8. Sweep on train picked 0.30 — large enough to let many
+        unperturbed-source candidates through, small enough to still
+        downweight obvious reverse-ancestor pairs. Lower values
+        approach the iter-21 discrete-threshold behaviour.
     """
 
     top_k: int = 1000
     min_cells_per_arm: int = 20
     observational_ridge: float = 1e-4
     diff_power: float = 0.5
+    unpert_pert_direction_scale: float = 0.30
 
     def fit_predict(self, data: Dataset) -> list[Edge]:
         ctrl_mask = data.control_mask()
@@ -162,11 +175,11 @@ class DiffCovModel:
                 elif j_pert and not i_pert:
                     direction_weight[j, i] = 1.0
                 elif (not j_pert) and i_pert:
+                    # Smooth exponential downweight based on reverse shift.
                     a = abs(shifts[i, j])
-                    if a > 0.0:
-                        direction_weight[j, i] = 0.2
-                    else:
-                        direction_weight[j, i] = 0.8
+                    direction_weight[j, i] = float(
+                        np.exp(-a / self.unpert_pert_direction_scale)
+                    )
                 else:
                     a = abs(beta_obs[i, j])
                     b = abs(beta_obs[j, i])
