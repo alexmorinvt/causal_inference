@@ -1034,3 +1034,24 @@ Pareto frontier now:
 - **Best hidden recall**: ICP iter 35 at 0.781 train / 0.798 test
 
 ICP's identifiability argument is the first on the branch that uses **environment invariance** — not observational precision, not total-effect inversion, not per-arm covariance differences. It's orthogonal to every other family.
+
+### Iteration 38 — LikelihoodMLEModel (new family, exploratory, fails baseline)
+
+**Hypothesis**: direct maximum-likelihood estimation of ``W`` by gradient descent on the multi-arm Gaussian likelihood. For linear cyclic SCM with iid Gaussian noise, the per-arm covariance is ``Σ_{W,a} = σ² (I − W̃_a)⁻¹ (I − W̃_a)⁻ᵀ`` with ``W̃_a`` the arm-modified weight matrix (row ``G`` zero'd for ``do(G)``). Jointly fit ``W`` by minimising the sum of per-arm negative log-likelihoods using sample-covariance sufficient statistics. Distinct from EnsembleSCMFitter (closed form vs simulation-based moment matching), distinct from NR (estimates ``W`` vs ``Θ``).
+
+**Change**: new `grn_inference/likelihood_mle/LikelihoodMLEModel`. Torch autograd over ``W``, SGD with spectral-radius projection to keep ``(I−W)`` invertible, L1 sparsity penalty. No mean-term in the likelihood (fit the covariance structure only — approximate).
+
+**Train/test** (`n_steps ∈ {200, 500, 1000}`):
+
+| n_steps | train prec | train hidden | test prec | test hidden |
+|--------:|----------:|-------------:|---------:|------------:|
+| 200 | 0.127 | 0.479 | 0.130 | 0.484 |
+| 500 | 0.128 | 0.481 | 0.129 | 0.472 |
+| 1000 | 0.127 | 0.470 | 0.129 | 0.474 |
+| MD baseline | 0.128 | 0.000 | 0.131 | 0.000 |
+
+LMLE hidden recall is strong (~0.47) but **precision fails to beat MD on test**. At `n_steps=500` train precision ties MD (0.128), but test precision is 0.129 < MD's 0.131.
+
+Diagnosis: my implementation omits the do(G) mean-term in the likelihood (approximating μ_a(W) ≈ 0), which loses identifiability information that distinguishes interventional from observational arms. A full mean-term ML formulation would be the natural next step.
+
+**Verdict**: **EXPLORATORY — FAILS BASELINE**. Code kept in `grn_inference/likelihood_mle/` for future iteration; not added to the default benchmark dict since it regresses test precision below MD. A proper MLE with full mean-term likelihood on do-arms is the right next attempt within this family.

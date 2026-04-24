@@ -12,6 +12,7 @@ from .ensemble_scm import EnsembleSCMFitter
 from .evaluator import StatisticalResult, evaluate_statistical
 from .indirect_pruning import IndirectPruningModel
 from .invariance_icp import InvarianceICPModel
+from .likelihood_mle import LikelihoodMLEModel
 from .models import MeanDifferenceModel, Model, RandomBaseline
 from .neighborhood_regression import NeighborhoodRegressionModel
 from .path_inversion import PathInversionModel
@@ -27,6 +28,7 @@ __all__ = [
     "EnsembleSCMFitter",
     "IndirectPruningModel",
     "InvarianceICPModel",
+    "LikelihoodMLEModel",
     "MeanDifferenceModel",
     "Model",
     "NeighborhoodRegressionModel",
