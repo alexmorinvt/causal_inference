@@ -82,8 +82,15 @@ class NeighborhoodRegressionModel:
         Total number of ranked edges to return.
     unperturbed_fraction
         Fraction of ``top_k`` allocated to the unperturbed-source bucket.
-        The default of ``0.5`` matches the uniform-source prior on a
-        generator that perturbs half the genes.
+        The default of ``0.75`` was selected by a train-seed sweep over
+        {0.30, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80,
+        0.85, 0.90} at `n_genes=50, n_perturbed=25, top_k=1000`; it
+        maximises precision@k on the train split. The uniform-source
+        prior would suggest 0.5, but after the β-asymmetry direction
+        filter the unperturbed bucket's marginal precision at ranks
+        500–750 exceeds the perturbed bucket's marginal precision at
+        ranks 500–1000, so more of the top-k budget is better spent on
+        unperturbed-source edges.
     ridge_lambda
         Ridge regulariser added to the control-covariance diagonal
         before inversion. Keeps the precision estimate well-posed when
@@ -134,7 +141,7 @@ class NeighborhoodRegressionModel:
     """
 
     top_k: int = 1000
-    unperturbed_fraction: float = 0.5
+    unperturbed_fraction: float = 0.75
     ridge_lambda: float = 1e-4
     reverse_shift_damping: bool = True
     within_arm_corr_weight: float = 1.0

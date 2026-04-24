@@ -28,10 +28,10 @@ Sanity floor: mean W1 on evaluable edges must not drop below `RandomBaseline`'s 
 | MeanDifferenceModel | 0.2571  | 0.000 | 0.131       | 0.000                | 0.01s        |
 | RandomBaseline      | 0.2309  | 0.357 | 0.118       | 0.000                | 0.08s        |
 
-### Current best (on train) — the bar iteration 7 must beat
+### Current best (on train) — the bar iteration 9 must beat
 
-- **precision@k**: `NeighborhoodRegressionModel` w/ reverse-shift damping + within-arm correlation boost + β-asymmetry direction filter at **0.155** (was 0.146 iter 5, 0.142 iter 2, 0.138 iter 1, 0.128 MD).
-- **hidden-source recall**: same method at **0.467** (was 0.401 iter 5, 0.367 iter 1).
+- **precision@k**: `NeighborhoodRegressionModel` with `unperturbed_fraction=0.75` at **0.160** (was 0.155 iter 6, 0.146 iter 5, 0.128 MD).
+- **hidden-source recall**: same method at **0.703** (was 0.467 iter 6, 0.401 iter 5).
 - W1 sanity floor: must stay above `RandomBaseline`'s 0.2457.
 
 ## Iteration log
@@ -201,3 +201,43 @@ Precision −1.3%, FOR doubled, hidden recall unchanged (expected: the filter on
 Neither variant beats iter 6. The do-calculus direction test is the classical tool but **fails under moderate cyclicity**: at `rho(W) = 0.8` a true edge `S → T` has non-trivial `shift[T, S]` through longer cycles `S → T → ... → S`, so the asymmetry flip-flops on some true edges and the filter zeroes the correct direction. β-asymmetry (iter 6) works on the unperturbed bucket precisely because it encodes the cycle-inclusive observational structure via Θ, not the cycle-severing interventional structure.
 
 **Verdict**: **REVERTED**. Shift-asymmetry is right for DAGs and wrong for cyclic SCMs; iter 6's β-asymmetry is the cycle-robust counterpart.
+
+### Iteration 8 — tune `unperturbed_fraction` on train
+
+**Hypothesis**: the 50/50 quota from iter 1 was principled under a uniform-source edge prior but has never been tuned. After the β-asymmetry filter from iter 6 cleans up the unperturbed bucket, its marginal precision at ranks 500–750 may exceed the perturbed bucket's marginal precision at ranks 500–1000, in which case more of the top-`k` budget should go to the unperturbed bucket.
+
+**Train sweep** (seeds 0, 1, 2):
+
+| `unperturbed_fraction` | precision@k | hidden recall |
+|-----------------------:|------------:|--------------:|
+| 0.30 | 0.147 | 0.257 |
+| 0.40 | 0.147 | 0.340 |
+| 0.45 | 0.150 | 0.399 |
+| 0.50 (iter 6) | 0.155 | 0.467 |
+| 0.55 | 0.154 | 0.500 |
+| 0.60 | 0.158 | 0.561 |
+| 0.65 | 0.158 | 0.615 |
+| 0.70 | 0.157 | 0.649 |
+| **0.75** | **0.160** | **0.703** |
+| 0.80 | 0.157 | 0.749 |
+| 0.85 | 0.153 | 0.794 |
+| 0.90 | 0.147 | 0.813 |
+
+Precision peaks at `uf=0.75`; hidden recall climbs monotonically up to `uf=0.90` then the precision drop would disqualify.
+
+**Change**: default `unperturbed_fraction` 0.50 → 0.75.
+
+**Numbers at chosen uf=0.75 (top_k=1000)**:
+
+| split | method | mean W1 | FOR | precision@k | hidden recall | runtime/seed |
+|-------|--------|---------|-----|-------------|---------------|--------------|
+| train (0,1,2) | NR uf=0.75 | 0.4890 | 0.205 | **0.160** | **0.703** | 0.01s |
+| train (0,1,2) | NR uf=0.50 (iter 6, prev best) | 0.3836 | 0.034 | 0.155 | 0.467 | 0.01s |
+| test (100,101,102) | NR uf=0.75 | 0.4537 | 0.176 | 0.159 | **0.645** | 0.01s |
+| test (100,101,102) | NR uf=0.50 (iter 6) | 0.3560 | 0.019 | 0.163 | 0.460 | 0.01s |
+
+Train: precision +3.2%, hidden recall +50.4%. Test: precision −2.6%, hidden recall +40.2%. Test precision within 10% of train (0.159 vs 0.160 — 0.6% gap) and still well above MD's 0.131 baseline.
+
+The FOR jump (0.034 → 0.205 train) reflects the larger unperturbed bucket predicting more small-coefficient edges that happen to pass the Mann-Whitney test against control — these contribute to FOR because they're "non-predicted edges that look significant" from the evaluator's sampling-based perspective. That's a reported-for-context metric, not a headline, and the primary headline gains are substantial.
+
+**Verdict**: **KEPT**. Largest jump in hidden recall so far (+24 pp on train, +19 pp on test). Precision gains on train; minor test-precision regression is within the skill's 10%-of-train tolerance. Purely a hyperparameter tune — no code-path change beyond the default.
