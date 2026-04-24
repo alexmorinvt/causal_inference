@@ -82,3 +82,34 @@ with `scale` = mean of non-zero shift entries (data-adaptive, no free hyperparam
 Both headline metrics improve on both splits (precision: +3.3% train, +1.4% test; hidden recall: +9.3% train, +4.1% test). Mean W1 is unchanged because the perturbed-source bucket and W1-denominators (evaluable perturbed-source edges) are untouched.
 
 **Verdict**: **KEPT**.
+
+### Iteration 3 — pool interventional cells in the neighborhood regression (reverted)
+
+**Hypothesis**: for regressing gene `T`, every cell whose intervention target is not `T` satisfies `T`'s structural equation `x_T = Σ_k W[T,k] x_k + ε_T` (the SCM equation is violated only for the perturbed gene's own row). Pooling control + non-`T`-perturbed cells increases the regression sample size from ~2000 to ~7000 and, more importantly, exposes `T` to the broadened variation in upstream genes perturbed elsewhere — interventions act as natural instruments. This should tighten `|β[T,S]|` estimates where it matters most: on rows whose parents are themselves perturbed.
+
+**Change**: added `use_interventional_cells: bool = True` to `NeighborhoodRegressionModel`. When enabled, `β[T, :]` is estimated per-target from `{cells where intervention ≠ T}` via a 50×50 ridge-regularised solve (one solve per target). `False` keeps the iteration-2 single-shot control-only precision path.
+
+**Numbers (top_k=1000)**:
+
+| split | method | mean W1 | FOR | precision@k | hidden recall | runtime/seed |
+|-------|--------|---------|-----|-------------|---------------|--------------|
+| train (0,1,2) | NR + interventional cells | 0.3841 | 0.026 | 0.144 | 0.416 | 0.19s |
+| train (0,1,2) | NR (iter 2, prev best) | 0.3841 | 0.032 | 0.142 | 0.401 | 0.01s |
+| test (100,101,102) | NR + interventional cells | 0.3561 | 0.016 | 0.154 | 0.410 | 0.18s |
+| test (100,101,102) | NR (iter 2) | 0.3561 | 0.019 | 0.157 | 0.432 | 0.01s |
+
+Train: precision +1.4%, hidden recall +3.9% — both positive but small.
+Test: precision −1.9%, hidden recall −5.1% vs iter 2 — both regress.
+
+**Tuning pass** (train seeds, `ridge_lambda ∈ {1e-4, 1e-3, 1e-2, 1e-1}`):
+
+| ridge_λ | precision@k | hidden recall |
+|--------:|------------:|--------------:|
+| 1e-4    | 0.1443      | 0.4164        |
+| 1e-3    | 0.1443      | 0.4164        |
+| 1e-2    | 0.1443      | 0.4164        |
+| 1e-1    | 0.1440      | 0.4140        |
+
+Ridge is essentially inactive at these scales — the covariance is well-conditioned even before regularisation — so no hyperparameter lever salvages the test regression.
+
+**Verdict**: **REVERTED**. Train gain is small; test regresses against iter 2's committed numbers. Runtime also 20× slower (0.19s vs 0.01s per seed). The interventional-cells variation in the regressors may still be useful signal, but not through naive pooling — a future iteration should route it through an instrumental-variable or weighted-regression design rather than concat-all-cells.
