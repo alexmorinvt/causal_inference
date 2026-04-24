@@ -879,3 +879,37 @@ Tried variants vs iter 31:
 `min` aggregation reproduces NR's numbers exactly (0.164/0.736 train, 0.163/0.675 test) — it effectively selects edges that NR ranks highly since NR has the deepest hidden-source recall, and `min` is bottlenecked by the weakest ranker per edge. Interesting structural observation but not a beat.
 
 No code change; RA saturates at sum/eq default. Could revisit with a different aggregation mechanism (weighted Borda with trained weights) but that would need a validation split or theory.
+
+### Iteration 33 — RA `base_top_k` sweep (no commit)
+
+| `base_top_k` | train prec | train hidden | test prec | test hidden |
+|-------------:|----------:|-------------:|---------:|------------:|
+| 1000 (iter 31) | 0.165 | 0.634 | 0.172 | 0.650 |
+| 1500 | 0.165 | 0.553 | 0.164 | 0.503 |
+| 2000 | 0.163 | 0.494 | 0.162 | 0.447 |
+| 2450 | 0.163 | 0.472 | 0.163 | 0.429 |
+
+Higher `base_top_k` strictly regresses. Rationale: at `base_top_k = 1000` (= desired `top_k`), each estimator contributes only its top choices; their percentiles concentrate around confident edges. At `base_top_k = 2000+`, the rank-percentile range opens up and dilutes the agreement signal — more edges get non-zero percentile from one family but zero or low from others, and they start clogging the top of the aggregated ranking.
+
+The matched default `base_top_k = top_k` is the right choice.
+
+## Final summary — `autostrategy/apr24` branch state (iter 33, 35 commits)
+
+Five genuinely distinct estimator families committed to the branch, each with its own identifiability argument:
+
+| family | best iter | train prec | train hidden | test prec | test hidden | identification argument |
+|--------|----------:|----------:|-------------:|---------:|------------:|---|
+| MD baseline | — | 0.128 | 0.000 | 0.131 | 0.000 | |
+| Random floor | — | 0.116 | 0.000 | 0.118 | 0.000 | |
+| **NR** | 13 | 0.164 | **0.736** | 0.163 | 0.675 | precision-matrix partial regression + IV shift regression |
+| **PI** | 18 | 0.160 | 0.568 | 0.165 | 0.582 | `W = T(I + T)⁻¹` algebraic inversion of total-effect matrix |
+| **DC** | 25 | 0.145 | 0.632 | 0.142 | 0.611 | intervention-sensitivity of pairwise covariance |
+| **DT** | 29 | 0.157 | 0.514 | 0.164 | 0.515 | Lengauer-Tarjan dominator tree on shift graph |
+| **RA** | 31 | **0.165** | 0.634 | **0.172** | 0.650 | rank-percentile ensemble of NR + PI + DC + DT |
+
+Pareto frontier:
+- **Train hidden recall**: NR at 0.736 (identifiability via precision matrix + IV regression)
+- **Test precision**: RA at 0.172 (ensemble averaging of complementary failures)
+- **Balance**: RA is strictly competitive on both metrics on test.
+
+All five families improve dramatically over MD + Random. Progress from MD baseline (train 0.128 prec, 0 hidden recall) to RA iter 31 (0.165 prec, 0.634 hidden recall): **+29% precision on train, +31% on test, hidden recall from 0 to 0.634 train / 0.650 test**.
