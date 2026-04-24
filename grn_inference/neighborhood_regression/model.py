@@ -138,6 +138,22 @@ class NeighborhoodRegressionModel:
         edge, so keeping only the β-stronger direction sacrifices no
         precision on true edges while removing half the wrong-direction
         candidates from the ranking pool.
+    n_bootstrap
+        Number of bootstrap resamples of the control cells used to
+        estimate ``|β|`` by averaging. ``1`` means no bootstrapping
+        (single precision-matrix inversion on all control cells);
+        ``0`` is also treated as no bootstrap for clarity. Larger
+        ``n_bootstrap`` reduces the variance of individual ``|β|``
+        entries — high-variance (noise-dominated) β's get averaged
+        toward their mean (smaller magnitude), while low-variance
+        (signal-dominated) β's retain their magnitude. This
+        variance-reduction does not change the estimand but cleans up
+        the unperturbed-bucket ranking. Default ``10`` chosen by a
+        train-seed sweep; marginal gains flatten past ``n_bootstrap =
+        10``.
+    bootstrap_seed
+        Seed for the bootstrap resampling RNG. Fixed default of ``0``
+        so the ranker is deterministic.
     """
 
     top_k: int = 1000
@@ -146,6 +162,42 @@ class NeighborhoodRegressionModel:
     reverse_shift_damping: bool = True
     within_arm_corr_weight: float = 1.0
     direction_from_beta_asymmetry: bool = True
+    n_bootstrap: int = 10
+    bootstrap_seed: int = 0
+
+    def _estimate_beta_abs(self, ctrl_expr: np.ndarray, G: int) -> np.ndarray:
+        """Estimate ``|β|`` from control cells.
+
+        ``β[i, j] = -Θ[i, j] / Θ[i, i]`` where ``Θ`` is the
+        ridge-regularised control-cell precision matrix. When
+        ``self.n_bootstrap > 1`` the estimate is averaged over bootstrap
+        resamples of the control cells (variance reduction).
+        """
+        def one_beta_abs(X: np.ndarray) -> np.ndarray:
+            Xc = X - X.mean(axis=0)
+            n = Xc.shape[0]
+            cov = (Xc.T @ Xc) / max(n, 1)
+            cov = cov.astype(np.float64) + self.ridge_lambda * np.eye(
+                G, dtype=np.float64
+            )
+            prec = np.linalg.inv(cov)
+            diag = np.diag(prec).copy()
+            diag = np.where(diag > 0.0, diag, 1.0)
+            beta = -prec / diag[:, None]
+            np.fill_diagonal(beta, 0.0)
+            return np.abs(beta)
+
+        n_boot = max(1, int(self.n_bootstrap))
+        if n_boot <= 1:
+            return one_beta_abs(ctrl_expr)
+
+        rng = np.random.default_rng(self.bootstrap_seed)
+        n_ctrl = ctrl_expr.shape[0]
+        agg = np.zeros((G, G), dtype=np.float64)
+        for _ in range(n_boot):
+            idx = rng.integers(0, n_ctrl, size=n_ctrl)
+            agg += one_beta_abs(ctrl_expr[idx])
+        return agg / n_boot
 
     def fit_predict(self, data: Dataset) -> list[Edge]:
         ctrl_mask = data.control_mask()
@@ -189,24 +241,14 @@ class NeighborhoodRegressionModel:
         shift_boosted = shift_boosted.astype(np.float32)
 
         # ---- Unperturbed-source bucket: neighborhood regression --------
-        # Center control expression, compute ridge-regularised
-        # precision, extract regression coefficients.
-        Xc = ctrl_expr - ctrl_means
-        n_ctrl = Xc.shape[0]
-        cov = (Xc.T @ Xc) / max(n_ctrl, 1)
-        cov = cov.astype(np.float64) + self.ridge_lambda * np.eye(G, dtype=np.float64)
-        prec = np.linalg.inv(cov)
-        diag = np.diag(prec).copy()
-        # Guard against any degenerate Theta[i, i] <= 0 (shouldn't happen
-        # with a ridge, but be safe).
-        diag = np.where(diag > 0.0, diag, 1.0)
-        # beta[i, j] = -Theta[i, j] / Theta[i, i], the coefficient on
-        # gene j in the regression of gene i on the rest.
-        beta = -prec / diag[:, None]
-        np.fill_diagonal(beta, 0.0)
-        # We want a score indexed by (source, target) = (j, i), so take
-        # the transpose of |beta|.
-        beta_score = np.abs(beta).T.astype(np.float32)
+        # Estimate |β| via the ridge-regularised precision matrix. When
+        # ``n_bootstrap > 1`` the estimate is averaged over bootstrap
+        # resamples of the control cells — a variance-reduction step
+        # that demotes noise-dominated β entries without changing the
+        # estimand.
+        beta_abs = self._estimate_beta_abs(ctrl_expr, G)
+        # score indexed by (source=j, target=i) -> transpose of |β|.
+        beta_score = beta_abs.T.astype(np.float32)
         np.fill_diagonal(beta_score, 0.0)
 
         # ---- Bucket edges by source perturbation status ---------------

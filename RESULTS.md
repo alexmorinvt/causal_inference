@@ -28,10 +28,10 @@ Sanity floor: mean W1 on evaluable edges must not drop below `RandomBaseline`'s 
 | MeanDifferenceModel | 0.2571  | 0.000 | 0.131       | 0.000                | 0.01s        |
 | RandomBaseline      | 0.2309  | 0.357 | 0.118       | 0.000                | 0.08s        |
 
-### Current best (on train) — the bar iteration 9 must beat
+### Current best (on train) — the bar iteration 12 must beat
 
-- **precision@k**: `NeighborhoodRegressionModel` with `unperturbed_fraction=0.75` at **0.160** (was 0.155 iter 6, 0.146 iter 5, 0.128 MD).
-- **hidden-source recall**: same method at **0.703** (was 0.467 iter 6, 0.401 iter 5).
+- **precision@k**: `NeighborhoodRegressionModel` + bootstrap β averaging at **0.162** (was 0.160 iter 8, 0.155 iter 6, 0.146 iter 5, 0.128 MD).
+- **hidden-source recall**: same method at **0.718** (was 0.703 iter 8, 0.467 iter 6, 0.401 iter 5).
 - W1 sanity floor: must stay above `RandomBaseline`'s 0.2457.
 
 ## Iteration log
@@ -277,3 +277,37 @@ Both metrics regress: precision −3.8%, hidden recall −5.9%. The theoretical 
 β-corroboration is essentially inert at w ∈ [0.25, 2.0] (tie) and regresses at w=5. The top-250 perturbed-source edges by `shift * (1 + w_corr·|corr|)` are already well-separated from the rest; adding β as a third factor doesn't reshuffle the top-250 membership.
 
 **Verdict**: **REVERTED** (tie). β-corroboration is a principled idea but the perturbed-bucket top is already saturated by interventional evidence on this benchmark. May bite on noisier or more cascade-prone data.
+
+### Iteration 11 — bootstrap stability averaging of β
+
+**Hypothesis**: the unperturbed-bucket ranking is sensitive to sample noise in individual `|β[T, S]|` entries. Meinshausen & Bühlmann's stability selection argument: variance-reduce the estimate by resampling control cells, computing `|β|` on each resample, and averaging. High-variance (noise-dominated) β entries shrink toward their mean (smaller), while low-variance (signal-dominated) β entries retain their magnitude. Averaging does not change the estimand but cleans up the ranking.
+
+**Train sweep** `n_bootstrap ∈ {1, 5, 10, 20, 50}`:
+
+| `n_bootstrap` | precision@k | hidden recall |
+|-------------:|------------:|--------------:|
+| iter 8 (no bootstrap) | 0.1600 | 0.7033 |
+| 1 | 0.1577 | 0.6861 |
+| 5 | 0.1633 | 0.7279 |
+| **10** | 0.1620 | 0.7180 |
+| 20 | 0.1617 | 0.7153 |
+| 50 | 0.1620 | 0.7174 |
+
+`n=1` regresses because a single bootstrap resample injects noise without averaging it out. `n ≥ 5` consistently beats iter 8. Marginal gains flatten past `n=10`. Picked `n_bootstrap=10` for robustness (less dependent on specific resample draws than `n=5`).
+
+Graphical lasso alternative was also tried and sweeps over `α ∈ {0.005, ..., 0.2}` were strictly worse than ridge at every value. The L1-sparsification over-zeroes true-but-weak edges; ridge on the well-conditioned 2000-cell covariance is already near-optimal, so bootstrap is the cleaner variance-reduction lever.
+
+**Change**: added `n_bootstrap: int = 10` and `bootstrap_seed: int = 0` to `NeighborhoodRegressionModel`; factor the β-estimation step into `_estimate_beta_abs` which averages over `n_bootstrap` resamples of control cells.
+
+**Numbers at `n_bootstrap=10` (top_k=1000)**:
+
+| split | method | mean W1 | FOR | precision@k | hidden recall | runtime/seed |
+|-------|--------|---------|-----|-------------|---------------|--------------|
+| train (0,1,2) | NR + bootstrap β | 0.4890 | 0.208 | **0.162** | **0.718** | 0.02s |
+| train (0,1,2) | NR (iter 8, prev best) | 0.4890 | 0.205 | 0.160 | 0.703 | 0.01s |
+| test (100,101,102) | NR + bootstrap β | 0.4537 | 0.173 | **0.160** | **0.656** | 0.02s |
+| test (100,101,102) | NR (iter 8) | 0.4537 | 0.176 | 0.159 | 0.645 | 0.02s |
+
+Train: precision +1.3%, hidden recall +2.1%. Test: precision +0.6%, hidden recall +1.7%. Gains small but consistent on both splits; test numbers within 10% of train.
+
+**Verdict**: **KEPT**.
