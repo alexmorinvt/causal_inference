@@ -35,22 +35,25 @@ from scipy.stats import wasserstein_distance
 
 from grn_inference import (
     MeanDifferenceModel,
+    NeighborhoodRegressionModel,
     RandomBaseline,
     evaluate_statistical,
     make_synthetic_dataset,
 )
 
 
-# Methods included in the JSON summary block. The default set is just the
-# baselines — MD + Random. New methods under iteration should be added to
-# this dict explicitly by the iteration that introduces them. Oracle is
-# printed in the per-seed tables but excluded from the summary (it reads
-# ground truth). Each entry is a zero-arg factory that returns a fresh
-# instance bound to ``top_k``.
+# Methods included in the JSON summary block. The default set is the
+# MD + Random baselines plus whatever methods iterations have added.
+# Oracle is printed in the per-seed tables but excluded from the summary
+# (it reads ground truth). Each entry is a zero-arg factory that returns
+# a fresh instance bound to ``top_k``.
 def build_methods(top_k: int, fit_seed: int = 0):
     return {
         "MeanDifferenceModel": lambda: MeanDifferenceModel(top_k=top_k),
         "RandomBaseline": lambda: RandomBaseline(top_k=top_k, seed=fit_seed),
+        "NeighborhoodRegressionModel": lambda: NeighborhoodRegressionModel(
+            top_k=top_k,
+        ),
     }
 
 
