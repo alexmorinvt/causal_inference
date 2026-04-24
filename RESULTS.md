@@ -36,9 +36,9 @@ Each family is evaluated against MD + Random (universal baselines) and its own p
 - precision@k: **0.164** (train) / 0.163 (test)
 - hidden-source recall: **0.736** (train) / 0.675 (test)
 
-**PI family** (`PathInversionModel`, iter 14+, currently at iter 14):
-- precision@k: **0.137** (train) / 0.153 (test) — beats MD baseline (+7% train, +17% test)
-- hidden-source recall: **0.391** (train) / 0.445 (test) — beats MD baseline (0.000 → new capability)
+**PI family** (`PathInversionModel`, iter 14+, currently at iter 15):
+- precision@k: **0.153** (train) / 0.157 (test) — was 0.137/0.153 at iter 14; beats MD baseline (+20% train, +20% test)
+- hidden-source recall: **0.560** (train) / 0.555 (test) — was 0.391/0.445 at iter 14; beats MD baseline (0.000 → new capability)
 
 W1 sanity floor (for any family): must stay above `RandomBaseline`'s 0.2457 on train / 0.2309 on test.
 
@@ -398,3 +398,24 @@ Observations from the numbers:
 - The perturbed-source half of `T` is directly observed and the matrix inversion cleanly de-convolves it — PI beats MD on precision because its inversion removes cascade contributions from the shift signal.
 - The unperturbed-source half comes from observational correlation, which is undirected and confounded. This is the weakest link for PI family; future PI iterations should focus here.
 - A promising next step for the PI family: replace the observational-correlation imputation with a cleaner direction-aware signal (e.g., sign-preserving partial correlations, interventional-arm-averaged correlations, or an IV-style regression of shift columns across arms).
+
+### Iteration 15 — PI: IV-shift-regression imputation for unperturbed T columns
+
+**Hypothesis**: the iter-14 imputation of `T[:, j]` for unperturbed `j` used the symmetric observational correlation matrix, which carries all the known direction-ambiguity of observational data. Replace it with a directed interventional signal: for a cascade `G → j → i` we have `shift[G, i] ≈ shift[G, j] · T[i, j]`, so regressing `shift[:, i]` on `shift[:, j]` across perturbed `G` gives an IV-style estimate of `T[i, j]`. The coefficient `β_iv[j, i] = ⟨s_j, s_i⟩ / ⟨s_j, s_j⟩` is NOT symmetric in `(j, i)` — swapping them changes the denominator — so it preserves direction.
+
+**Change**: added `imputation_mode: str = "iv_shift_regression"` (default) to `PathInversionModel`. The legacy `"correlation"` mode is preserved for A/B comparison.
+
+**Numbers (top_k=1000)** — PI family iter 15 vs iter 14 and vs MD baseline:
+
+| split | method | mean W1 | FOR | precision@k | hidden recall | runtime/seed |
+|-------|--------|---------|-----|-------------|---------------|--------------|
+| train (0,1,2) | PI iter 15 (IV imputation) | 0.380 | 0.177 | **0.153** | **0.560** | 0.01s |
+| train (0,1,2) | PI iter 14 (correlation imputation) | 0.367 | 0.119 | 0.137 | 0.391 | 0.01s |
+| train (0,1,2) | MD baseline | 0.274 | 0.000 | 0.128 | 0.000 | 0.01s |
+| test (100,101,102) | PI iter 15 | 0.354 | 0.170 | **0.157** | **0.555** | 0.01s |
+| test (100,101,102) | PI iter 14 | 0.335 | 0.115 | 0.153 | 0.445 | 0.01s |
+| test (100,101,102) | MD baseline | 0.257 | 0.000 | 0.131 | 0.000 | 0.01s |
+
+Train: precision +12%, hidden recall +43% vs iter 14. Test: precision +3%, hidden recall +25% vs iter 14. Still well above MD baseline on both splits. Hidden recall gap to train narrows: iter 14 had 0.391→0.445 (test higher than train — PI iter 14 was an unusual case); iter 15 has 0.560→0.555 (now flat, no overfitting signal).
+
+**Verdict**: **KEPT**. First iteration within the PI family that beats iter 14 on both headline metrics on both splits.

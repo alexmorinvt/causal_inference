@@ -49,7 +49,7 @@ def test_returns_unperturbed_source_edges_when_obs_weight_positive():
     )
 
 
-def test_no_unperturbed_edges_when_obs_weight_zero():
+def test_no_unperturbed_edges_when_correlation_imputation_is_zero():
     data, _ = make_synthetic_dataset(
         n_genes=20,
         edge_density=0.15,
@@ -59,12 +59,17 @@ def test_no_unperturbed_edges_when_obs_weight_zero():
         seed=2,
     )
     perturbed = set(data.perturbed_genes())
-    edges = PathInversionModel(top_k=100, obs_correlation_weight=0.0).fit_predict(data)
-    # With zero obs weight, unperturbed T columns stay at zero, so W's
-    # columns are zero for unperturbed sources, so no edges with unperturbed source.
+    edges = PathInversionModel(
+        top_k=100,
+        imputation_mode="correlation",
+        obs_correlation_weight=0.0,
+    ).fit_predict(data)
+    # With correlation mode and zero obs weight, unperturbed T columns
+    # stay at zero, so no edges with unperturbed source.
     for s, _ in edges:
         assert s in perturbed, (
-            "With obs_correlation_weight=0 no unperturbed-source edges should appear."
+            "With correlation imputation + obs_correlation_weight=0 "
+            "no unperturbed-source edges should appear."
         )
 
 

@@ -77,18 +77,31 @@ class PathInversionModel:
         enough not to materially change ``W`` on well-posed inputs.
     obs_correlation_weight
         Multiplier on the observational correlation columns used to
-        impute ``T[:, j]`` for unperturbed ``j``. ``0.0`` leaves those
-        columns at zero (method returns perturbed-source edges only).
-        ``1.0`` uses correlations at the same scale as the perturbed
-        shift columns after magnitude matching.
+        impute ``T[:, j]`` for unperturbed ``j`` when
+        ``imputation_mode="correlation"``. ``0.0`` leaves those columns
+        at zero (method returns perturbed-source edges only). ``1.0``
+        uses correlations at the same scale as the perturbed shift
+        columns after magnitude matching.
     clip_obs_to_pos
         If ``True``, zero out any negative entries in the imputed
-        observational columns. Rationale: observational correlation
-        is noisy and we're only using magnitude information downstream;
-        keeping signs that reflect bivariate correlation (not causal
-        direction) can interfere with the inversion. Default ``False``
-        preserves signs (lets the inversion decompose signed paths
-        correctly).
+        observational columns (correlation mode only). Default
+        ``False`` preserves signs.
+    imputation_mode
+        How to fill in ``T[:, j]`` for unperturbed source genes ``j``.
+
+        - ``"correlation"`` (iter-14 original): use the rescaled
+          control-cell correlation matrix. Undirected signal, carries
+          observational-only direction ambiguity.
+        - ``"iv_shift_regression"`` (iter-15 default): estimate the
+          missing total-effect column via an IV regression of shift
+          rows. For any perturbed ``G`` upstream of ``j``, a cascade
+          ``G -> j -> i`` gives ``shift[G, i] ≈ shift[G, j] · T[i, j]``.
+          Regressing ``shift[:, i]`` on ``shift[:, j]`` across perturbed
+          ``G`` (i.e. ``β_iv[j, i] = ⟨s_j, s_i⟩ / ⟨s_j, s_j⟩`` with
+          ``s_X = shift[pert, X]``) estimates ``T[i, j]`` and preserves
+          direction: swapping ``i`` and ``j`` gives a different
+          estimate. This is the direction-aware interventional-data
+          imputation the correlation fallback lacks.
     """
 
     top_k: int = 1000
@@ -96,6 +109,7 @@ class PathInversionModel:
     ridge: float = 1e-3
     obs_correlation_weight: float = 1.0
     clip_obs_to_pos: bool = False
+    imputation_mode: str = "iv_shift_regression"
 
     def fit_predict(self, data: Dataset) -> list[Edge]:
         ctrl_mask = data.control_mask()
@@ -125,36 +139,58 @@ class PathInversionModel:
         T = shifts.T.copy()  # T[i, j] = shift of i under do(j)
         np.fill_diagonal(T, 0.0)
 
-        # ---- Impute unperturbed columns of T via observational corr ---
+        # ---- Impute unperturbed columns of T --------------------------
         pert_mask = np.zeros(G, dtype=bool)
+        pert_idx_list: list[int] = []
         for g in perturbed_set:
-            pert_mask[data.gene_idx(g)] = True
+            i = data.gene_idx(g)
+            pert_mask[i] = True
+            pert_idx_list.append(i)
 
-        if self.obs_correlation_weight > 0.0 and (~pert_mask).any():
-            Xc = ctrl_expr - ctrl_means
-            Sigma = (Xc.T @ Xc) / max(Xc.shape[0], 1)
-            Sigma = Sigma.astype(np.float64)
-            std = np.sqrt(np.clip(np.diag(Sigma), 1e-12, None))
-            Rho = Sigma / (std[:, None] * std[None, :])
-            np.fill_diagonal(Rho, 0.0)
-
-            # Rescale obs correlations to match the magnitude of the
-            # observed shift columns: match the mean |nonzero entry|.
-            shift_abs = np.abs(T[:, pert_mask])
-            shift_abs = shift_abs[shift_abs > 0.0]
-            rho_abs = np.abs(Rho)
-            rho_abs = rho_abs[rho_abs > 0.0]
-            if shift_abs.size > 0 and rho_abs.size > 0:
-                scale = shift_abs.mean() / rho_abs.mean()
-            else:
-                scale = 1.0
-            imputed = self.obs_correlation_weight * scale * Rho
-            if self.clip_obs_to_pos:
-                imputed = np.clip(imputed, 0.0, None)
-            # Only overwrite unperturbed columns.
-            unpert_cols = np.where(~pert_mask)[0]
-            T[:, unpert_cols] = imputed[:, unpert_cols]
-            np.fill_diagonal(T, 0.0)
+        if (~pert_mask).any():
+            if self.imputation_mode == "iv_shift_regression" and pert_idx_list:
+                # IV regression: for unperturbed j, T[i, j] ≈ shift[G, i]
+                # regressed on shift[G, j] across perturbed G.
+                pert_idx = np.asarray(pert_idx_list)
+                S_pert = shifts[pert_idx, :]  # (n_pert, G); rows=perturbed G
+                # cross[j, i] = ⟨shift[:, j], shift[:, i]⟩
+                cross = S_pert.T @ S_pert
+                diag_denom = np.diag(cross).copy()
+                diag_denom = np.where(diag_denom > 1e-12, diag_denom, 1.0)
+                # beta_iv[j, i] = estimate of T[i, j] from regression of
+                # shift[:, i] on shift[:, j].
+                beta_iv = cross / diag_denom[:, None]
+                np.fill_diagonal(beta_iv, 0.0)
+                # Fill T[:, j] = beta_iv[j, :] for unperturbed j (convert
+                # from j-indexed row to i-indexed column of T).
+                unpert_cols = np.where(~pert_mask)[0]
+                for j in unpert_cols:
+                    T[:, j] = beta_iv[j, :]
+                np.fill_diagonal(T, 0.0)
+            elif (
+                self.imputation_mode == "correlation"
+                and self.obs_correlation_weight > 0.0
+            ):
+                Xc = ctrl_expr - ctrl_means
+                Sigma = (Xc.T @ Xc) / max(Xc.shape[0], 1)
+                Sigma = Sigma.astype(np.float64)
+                std = np.sqrt(np.clip(np.diag(Sigma), 1e-12, None))
+                Rho = Sigma / (std[:, None] * std[None, :])
+                np.fill_diagonal(Rho, 0.0)
+                shift_abs = np.abs(T[:, pert_mask])
+                shift_abs = shift_abs[shift_abs > 0.0]
+                rho_abs = np.abs(Rho)
+                rho_abs = rho_abs[rho_abs > 0.0]
+                if shift_abs.size > 0 and rho_abs.size > 0:
+                    scale = shift_abs.mean() / rho_abs.mean()
+                else:
+                    scale = 1.0
+                imputed = self.obs_correlation_weight * scale * Rho
+                if self.clip_obs_to_pos:
+                    imputed = np.clip(imputed, 0.0, None)
+                unpert_cols = np.where(~pert_mask)[0]
+                T[:, unpert_cols] = imputed[:, unpert_cols]
+                np.fill_diagonal(T, 0.0)
 
         # ---- Spectral projection to keep (I + T)^{-1} well-defined ----
         eigs = np.linalg.eigvals(T)
