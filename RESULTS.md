@@ -1055,3 +1055,14 @@ LMLE hidden recall is strong (~0.47) but **precision fails to beat MD on test**.
 Diagnosis: my implementation omits the do(G) mean-term in the likelihood (approximating μ_a(W) ≈ 0), which loses identifiability information that distinguishes interventional from observational arms. A full mean-term ML formulation would be the natural next step.
 
 **Verdict**: **EXPLORATORY — FAILS BASELINE**. Code kept in `grn_inference/likelihood_mle/` for future iteration; not added to the default benchmark dict since it regresses test precision below MD. A proper MLE with full mean-term likelihood on do-arms is the right next attempt within this family.
+
+### Iteration 39 — ICP: ridge sweep + LASSO-per-arm exploration (no commit)
+
+Tried ICP variants to push past iter 35:
+
+| attempt | outcome |
+|---------|---------|
+| ridge ∈ {1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0} | near-flat train/test, no clean beat |
+| LASSO per-arm β (α ∈ {0.01, 0.05, 0.1}) | seed-0 prec 0.143–0.145, hidden 0.67–0.77; 10× slower than ridge; not clearly better |
+
+No code change. ICP saturated at iter 35.
