@@ -46,6 +46,10 @@ Each family is evaluated against MD + Random (universal baselines) and its own p
 - precision@k: **0.145** (train) / 0.142 (test) — iter 20–25 progression: 0.135/0.144 → 0.136/0.145 → 0.137/0.141 → 0.139/0.141 → 0.140/0.140 → 0.145/0.142; beats MD baseline (+13% train, +8% test)
 - hidden-source recall: **0.632** (train) / 0.611 (test) — iter 20–25 progression: 0.17 → 0.19 → 0.29 → 0.34 → 0.38 → 0.63; beats MD baseline; biggest single-iter jump at iter 25 (+65%)
 
+**DT family** (`DominatorTreeModel`, iter 27+, currently at iter 27):
+- precision@k: **0.149** (train) / 0.145 (test) — beats MD baseline (+16% train, +11% test)
+- hidden-source recall: **0.336** (train) / 0.271 (test) — beats MD baseline (0.000 → new capability)
+
 W1 sanity floor (for any family): must stay above `RandomBaseline`'s 0.2457 on train / 0.2309 on test.
 
 ## Iteration log
@@ -730,3 +734,31 @@ Three variants tried against iter 25 baseline; none cleared both splits.
 | DC score → PI matrix inversion as final step | 0.130 | 0.570 | 0.129 | 0.555 | big regress |
 
 No code change committed. DC family at `precision@k ≈ 0.145`, `hidden-source recall ≈ 0.63` on train. Appears saturated in the current diff-cov + direction-weight + IV-boost structure. Further gains likely need a substantially different scoring mechanism — probably yet another family (SCC decomposition, min-cut, or a truly different identifiability argument).
+
+### Iteration 27 — DominatorTreeModel (new family: Lengauer-Tarjan dominator tree)
+
+**Hypothesis**: in graph theory, the **dominator tree** rooted at source `G` in a directed graph encodes the strongest possible graph-theoretic direct-edge relationships. A node `u` is the *immediate dominator* of `v` if every path from `G` to `v` passes through `u`. Removing the `u → v` edge disconnects `v` from `G`. This is a much stronger signal than "shift from `G` to `v` is large" — it's structural uniqueness.
+
+Algorithm:
+1. Build weighted directed graph `G_shift` from the shift matrix (perturbed sources) + cross-arm IV shift regression (unperturbed sources), with a quantile-based sparsity threshold.
+2. For each perturbed source `G`, compute the dominator tree rooted at `G` (Lengauer-Tarjan, via `networkx.immediate_dominators`).
+3. For each `v` reachable from `G` with immediate dominator `u`, emit the candidate direct edge `(u, v)` with vote weight `|edge_weight[u, v]|`.
+4. Aggregate votes across all source roots to get the final edge score.
+5. Fill remaining `top_k` slots with shift-magnitude ranking (dominator trees produce O(G) edges per root, not enough to fill 1000).
+
+**Key design choice** — sparsity threshold: at `quantile = 0.5` the graph is too dense and immediate dominators collapse to the root; at `quantile = 0.95` the graph is too sparse. Train sweep picked **`quantile = 0.90`** — 578 non-trivial dominator-tree edges per seed, precision ~0.15 on just those edges. Tail is filled with shift-sorted edges up to `top_k`.
+
+**Change**: new `grn_inference/dominator_tree/DominatorTreeModel`. Uses `networkx.immediate_dominators` for the Lengauer-Tarjan dominator tree; the rest is numpy.
+
+**Numbers (top_k=1000)**:
+
+| split | method | mean W1 | FOR | precision@k | hidden recall |
+|-------|--------|---------|-----|-------------|---------------|
+| train (0,1,2) | DominatorTreeModel | 0.317 | 0.153 | **0.149** | **0.336** |
+| train (0,1,2) | MeanDifferenceModel (baseline) | 0.274 | 0.000 | 0.128 | 0.000 |
+| test (100,101,102) | DominatorTreeModel | 0.277 | 0.173 | 0.145 | **0.271** |
+| test (100,101,102) | MeanDifferenceModel | 0.257 | 0.000 | 0.131 | 0.000 |
+
+Beats MD on both metrics on both splits (+16%/−/+11%/+27 pp). Mean W1 above Random's floor on both splits.
+
+**Verdict**: **KEPT** as DT family iter-27 baseline.
