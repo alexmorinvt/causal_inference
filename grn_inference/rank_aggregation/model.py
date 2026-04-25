@@ -32,11 +32,22 @@ class RankAggregationModel:
     base_top_k
         top_k passed to each base estimator. Usually equal to
         ``top_k`` but can be larger to get richer rank information.
-    include_nr, include_pi, include_dc, include_dt
+    include_nr, include_pi, include_dc, include_dt, include_icp
         Toggle which base estimator contributes to the ensemble.
+    aggregation
+        - ``"sum"`` (iter-31 default): sum of weighted rank-percentiles.
+          Equal weights, four estimators (NR, PI, DC, DT). ICP cannot
+          be added cleanly with sum because its precision dilutes the
+          ensemble.
+        - ``"product"`` (iter-41 default): geometric ensemble. Product
+          of ``percentile^weight`` per edge. Penalises edges absent
+          from any single ranker (it gets pct≈0). With ICP weighted
+          higher (weight 3) the ensemble inherits ICP's hidden-recall
+          advantage without letting its lower precision bog down the
+          rest.
     weights
         Optional per-estimator weights (must match the number of
-        enabled estimators in the order NR, PI, DC, DT). ``None``
+        enabled estimators in the order NR, PI, DC, DT, ICP). ``None``
         means equal weighting.
     """
 
@@ -46,6 +57,8 @@ class RankAggregationModel:
     include_pi: bool = True
     include_dc: bool = True
     include_dt: bool = True
+    include_icp: bool = False
+    aggregation: str = "sum"
     weights: tuple[float, ...] | None = None
 
     def fit_predict(self, data: Dataset) -> list[Edge]:
@@ -53,6 +66,7 @@ class RankAggregationModel:
         # grn_inference package init.
         from ..diff_cov import DiffCovModel
         from ..dominator_tree import DominatorTreeModel
+        from ..invariance_icp import InvarianceICPModel
         from ..neighborhood_regression import NeighborhoodRegressionModel
         from ..path_inversion import PathInversionModel
 
@@ -65,6 +79,8 @@ class RankAggregationModel:
             estimators.append(DiffCovModel(top_k=self.base_top_k))
         if self.include_dt:
             estimators.append(DominatorTreeModel(top_k=self.base_top_k))
+        if self.include_icp:
+            estimators.append(InvarianceICPModel(top_k=self.base_top_k))
 
         if not estimators:
             return []
@@ -79,17 +95,52 @@ class RankAggregationModel:
                     f"estimators {len(estimators)}"
                 )
 
-        agg_score: dict[Edge, float] = {}
-        for est, w in zip(estimators, weights):
-            edges = est.fit_predict(data)
-            n = len(edges)
-            if n == 0 or w == 0.0:
-                continue
-            for rank, edge in enumerate(edges):
-                # Percentile: top edge gets 1.0, bottom gets 1/n.
-                pct = (n - rank) / n
-                agg_score[edge] = agg_score.get(edge, 0.0) + w * pct
+        if self.aggregation == "sum":
+            agg_score: dict[Edge, float] = {}
+            for est, w in zip(estimators, weights):
+                edges = est.fit_predict(data)
+                n = len(edges)
+                if n == 0 or w == 0.0:
+                    continue
+                for rank, edge in enumerate(edges):
+                    pct = (n - rank) / n
+                    agg_score[edge] = agg_score.get(edge, 0.0) + w * pct
+            ordered = sorted(agg_score.items(), key=lambda kv: -kv[1])
+            return [edge for edge, _ in ordered[: self.top_k]]
 
-        # Sort by aggregated score, take top_k.
-        ordered = sorted(agg_score.items(), key=lambda kv: -kv[1])
-        return [edge for edge, _ in ordered[: self.top_k]]
+        elif self.aggregation == "product":
+            # Product of pct^weight per estimator; missing edges contribute 0.
+            edge_lists = []
+            edge_pcts = []
+            for est, w in zip(estimators, weights):
+                edges = est.fit_predict(data)
+                n = len(edges)
+                pcts = {}
+                if n > 0 and w != 0.0:
+                    for rank, edge in enumerate(edges):
+                        pcts[edge] = (n - rank) / n
+                edge_lists.append(edges)
+                edge_pcts.append(pcts)
+            all_edges = set()
+            for el in edge_lists:
+                all_edges.update(el)
+            agg: dict[Edge, float] = {}
+            for edge in all_edges:
+                p = 1.0
+                for w, pcts in zip(weights, edge_pcts):
+                    if w == 0.0:
+                        continue
+                    pct = pcts.get(edge, 0.0)
+                    if pct == 0.0:
+                        p = 0.0
+                        break
+                    p *= pct ** w
+                if p > 0.0:
+                    agg[edge] = p
+            ordered = sorted(agg.items(), key=lambda kv: -kv[1])
+            return [edge for edge, _ in ordered[: self.top_k]]
+        else:
+            raise ValueError(
+                f"Unknown aggregation={self.aggregation!r}; "
+                "expected 'sum' or 'product'."
+            )

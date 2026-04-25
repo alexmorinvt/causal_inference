@@ -54,8 +54,14 @@ def test_returns_edges_even_with_subset_of_estimators():
         n_perturbed_genes=8,
         seed=3,
     )
-    # Just NR + PI
+    # Just NR + PI; ICP also off; use sum aggregation since product
+    # with weights matching estimator count is fragile.
     edges = RankAggregationModel(
-        top_k=30, include_dc=False, include_dt=False,
+        top_k=30,
+        include_dc=False,
+        include_dt=False,
+        include_icp=False,
+        aggregation="sum",
+        weights=None,
     ).fit_predict(data)
     assert len(edges) > 0

@@ -1083,3 +1083,20 @@ Tried two composition recipes combining the strongest families:
 | 1.5, 1.5 | 0.160 | 0.394 | 0.160 | 0.367 |
 
 `icp^2 × nr^1` has highest train precision of any method on this branch (0.167) but hidden recall is middling (0.563). Not a clean Pareto win — RA still beats on test precision and ICP beats on hidden. Logging the observation without forking a new module (the composition doesn't add a genuinely new identifiability argument).
+
+### Iteration 41 — RA: add product aggregation + ICP support (defaults unchanged)
+
+**Hypothesis**: a quick pre-test (each estimator at top_k=2450) suggested product aggregation with ICP weighted 3 might beat iter 31 on all four metrics. With the actual model (`base_top_k=2450`, `weights=(1,1,1,1,3)`, `aggregation="product"`):
+
+| split | RA iter 41 product+ICP | RA iter 31 sum, no ICP |
+|-------|-----------------------:|-----------------------:|
+| train prec / hidden | 0.167 / 0.612 | 0.165 / 0.634 |
+| test prec / hidden | 0.171 / 0.577 | 0.172 / 0.650 |
+
+Train precision +1.2% but hidden regresses; test regresses on both. Not a beat.
+
+At `base_top_k = 1000` (= top_k), product aggregation is too aggressive — train prec jumps to **0.196** but hidden collapses to 0.327 because product-zeros eliminate any edge missing from a single ranker. Highest train precision seen on this branch but trade is too steep.
+
+**Change committed**: RA model now supports `aggregation="product"` and `include_icp=True` as opt-in options; default behaviour unchanged from iter 31 (sum aggregation, 4 families, no ICP). The product mode and ICP toggle remain available for users who want a precision-leaning ensemble.
+
+**Verdict**: **NO METRIC CHANGE** — iter 31 numbers preserved; new options added behind defaults.
