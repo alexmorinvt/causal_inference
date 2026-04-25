@@ -24,3 +24,6 @@ outputs/
 
 # Claude Code harness state
 .claude/scheduled_tasks.lock
+
+# autostrategy machine-readable log (human-readable RESULTS.md is tracked)
+results.tsv
