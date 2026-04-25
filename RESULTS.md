@@ -1100,3 +1100,20 @@ At `base_top_k = 1000` (= top_k), product aggregation is too aggressive — trai
 **Change committed**: RA model now supports `aggregation="product"` and `include_icp=True` as opt-in options; default behaviour unchanged from iter 31 (sum aggregation, 4 families, no ICP). The product mode and ICP toggle remain available for users who want a precision-leaning ensemble.
 
 **Verdict**: **NO METRIC CHANGE** — iter 31 numbers preserved; new options added behind defaults.
+
+### Iteration 42 — ICP bootstrap stability (no commit, Pareto observation)
+
+**Hypothesis**: bootstrap-stabilise the per-arm β estimates by resampling cells within each arm B times and averaging |β| before cross-arm aggregation.
+
+| n_boot | train prec | train hidden | test prec | test hidden |
+|-------:|----------:|-------------:|---------:|------------:|
+| 1 (iter 35) | 0.142 | 0.781 | 0.146 | 0.798 |
+| 5 | 0.135 | 0.810 | 0.142 | 0.859 |
+| 10 | 0.138 | 0.828 | 0.141 | 0.851 |
+| 20 | 0.139 | **0.833** | 0.139 | **0.851** |
+
+Bootstrap pushes hidden recall to **0.83 train / 0.85 test — new branch ceiling** (+6.6% / +6.6% over iter 35). But train precision regresses 2-5% across all settings. Strict "beat both" rule fails.
+
+This confirms the Pareto frontier on this synthetic data is steep around the high-hidden corner: trading 4 hits in precision (0.142→0.138 = ~4 edges per 1000) for 5 percentage points of hidden recall is not a clean win, but is genuinely informative as a tunable.
+
+**Verdict**: **NOT KEPT**, but adds ``n_bootstrap`` knob to ICP if wanted later.
