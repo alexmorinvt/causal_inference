@@ -10,9 +10,11 @@ This skill runs an autonomous loop that iterates on GRN inference methods. The b
 
 ## Setup
 
+Before proposing any hypothesis, **read `TRIED_PATHS.md`** in this skill's directory. It lists method families already explored on prior `autostrategy/*` branches and their saturation points — the skill forbids re-implementing a family under a different name, and the Pareto ceilings already attained are the real bar to clear, not MD alone.
+
 To set up a new experiment, work with the user to:
 
-1. **Agree on a run tag**: propose a tag based on today's date (e.g. `apr24`). The branch `autostrategy/<tag>` must not already exist — this is a fresh run.
+1. **Agree on a run tag**: propose a tag based on today's date (e.g. `apr25`). The branch `autostrategy/<tag>` must not already exist — this is a fresh run.
 2. **Ensure the working tree is clean**: run `git status` and confirm no uncommitted changes or untracked files that belong elsewhere. Stash or commit outstanding work on a different branch first. If unsure, confirm with the user before branching.
 3. **Create the branch**: `git checkout -b autostrategy/<tag>` from a clean `main`.
 4. **Read the in-scope files** for full context before writing a single line of code:
