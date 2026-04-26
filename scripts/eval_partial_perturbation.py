@@ -25,9 +25,12 @@ import numpy as np
 from scipy.stats import wasserstein_distance
 
 from grn_inference import (
+    DominatorTreeModel,
     EnsembleSCMFitter,
+    IndirectPruningModel,
     MeanDifferenceModel,
     RandomBaseline,
+    ShiftCorrModel,
     evaluate_statistical,
     make_synthetic_dataset,
 )
@@ -123,11 +126,26 @@ def main() -> None:
     rb_edges = RandomBaseline(top_k=max_k, seed=0).fit_predict(data)
     oracle_edges = [e for e, _ in oracle[:max_k]]
 
+    t0 = time.time()
+    sc_edges = ShiftCorrModel(top_k=max_k).fit_predict(data)
+    print(f"  ShiftCorrModel:    {time.time() - t0:.2f}s")
+
+    t0 = time.time()
+    ip_edges = IndirectPruningModel(top_k=max_k).fit_predict(data)
+    print(f"  IndirectPruning:   {time.time() - t0:.2f}s")
+
+    t0 = time.time()
+    dt_edges = DominatorTreeModel(top_k=max_k).fit_predict(data)
+    print(f"  DominatorTree:     {time.time() - t0:.2f}s")
+
     methods = {
         "Oracle (W1 sorted)": oracle_edges,
-        "EnsembleSCMFitter": fit_edges,
-        "Mean Difference":   md_edges,
-        "Random":            rb_edges,
+        "EnsembleSCMFitter":  fit_edges,
+        "DominatorTree":      dt_edges,
+        "IndirectPruning":    ip_edges,
+        "ShiftCorr":          sc_edges,
+        "Mean Difference":    md_edges,
+        "Random":             rb_edges,
     }
 
     # Evaluate at large top_k once per method to get per_edge_w1 maps;
