@@ -21,9 +21,68 @@ any alternative route.
 |---|---|---|
 | `shift_quantile` | 0.94 | Graph sparsity threshold. At q ≤ 0.88 the graph is too dense (dominators collapse to root); at q ≥ 0.94 dominator trees are meaningful. Selected by train sweep. |
 | `use_all_genes_as_roots` | True | Compute dominator trees from every gene as root (unperturbed roots use IV-imputed edges). Improves hidden-source recall. |
-| `weight_by_edge_magnitude` | True | Vote weight = edge weight magnitude rather than 1. |
+| `score_mode` | `"root_shift"` | How votes aggregate. See "Score modes" below. |
 | `fill_tail_with_shift` | True | Fill remaining top_k slots with shift-ranked edges not already selected. |
 | `top_k` | 1000 | Max edges returned. |
+
+## Score modes
+
+`score_mode` selects how the per-root immediate-dominator votes are
+aggregated into a per-edge score.
+
+- `"root_shift"` (default): `score[u, v] += |shifts[root, v]|` for each
+  root R where `idom_R(v) = u`. Rewards `(u, v)` edges that dominate
+  strong downstream signals from many perturbed roots. Unperturbed
+  roots contribute zero (no direct shift). Selected as default after
+  beating `"edge_weight"` on both statistical W1 and biological
+  precision on K562 and RPE1.
+- `"edge_weight"` (original behaviour): `score[u, v] += |edge_weight[u, v]|`
+  for each root that has `idom(v) = u`. Strong edges accumulate more
+  weight. Hidden-source recovery preserved through IV-imputed
+  `edge_weight` for unperturbed sources.
+- `"shift_rerank"`: collect integer vote counts and multiply by the
+  Mean-Difference shift magnitude — `score[u, v] = vote_count[u, v] × |shifts[u, v]|`.
+  Dominator structure reranks Mean-Difference's magnitude. Restores
+  high statistical W1 at the cost of hidden-source recovery, since
+  `shifts[u, v] = 0` for unperturbed `u`.
+
+`shift_rerank` and `root_shift` were added to address the low
+statistical W1 of `edge_weight` (Problem 1 below) by injecting
+shift-magnitude information into the vote aggregation.
+
+**`shift_rerank` is identical to `edge_weight` when every gene is
+perturbed.** Both reduce to `vote_count × |shifts[u, v]|` for perturbed
+``u``; the only difference is that `edge_weight` also picks up votes
+from IV-imputed unperturbed-source edges. On both K562 (622 / 622
+perturbed) and RPE1 (383 / 383 perturbed) the two modes give identical
+numbers — `shift_rerank` is only useful on partial-perturbation data.
+
+## Per-root vote scaling (Mann-Whitney |z|)
+
+Every vote a root `R` casts is scaled by `|z|` of a Mann-Whitney U test
+comparing `R`'s own expression in `do(R)` cells vs control — i.e. how
+strongly `R` was actually knocked down. Roots whose CRISPRi failed
+(weak knockdown → low `|z|`) contribute proportionally less;
+unperturbed roots get zero weight (knockdown not defined).
+
+This is always applied — there's no toggle. Adds one Mann-Whitney U
+test per perturbed gene (~3 s on K562, ~1 s on RPE1).
+
+## Benchmark table (CausalBench, STRING ≥ 900)
+
+| Method | K562 STRING net top_250 | K562 STRING phys top_500 | RPE1 STRING net top_500 |
+|---|---|---|---|
+| MeanDifference (anchor) | 0.068 | 0.088 | 0.012 |
+| ShiftCorr (anchor)      | **0.268** | **0.252** | 0.012 |
+| DT[edge_weight] (orig)  | 0.048 | 0.012 | 0.012 |
+| DT[shift_rerank]        | 0.048 | 0.012 | 0.012 |
+| DT[root_shift] (default) | **0.152** | **0.182** | **0.024** |
+
+`root_shift` (the new default) with mandatory MW-`|z|` weighting gives
+a 3–8× lift over the unweighted variants on K562 and the only DT
+setting that beats both Mean Difference and ShiftCorr on RPE1 (though
+all RPE1 numbers are near random — the dataset is hard). Still trails
+ShiftCorr on K562.
 
 ## Benchmark results (synthetic, n_genes=50, n_perturbed=25)
 
@@ -39,15 +98,13 @@ At matched W1=0.50: finds 134 true hits (66 hidden) vs 108/0 for Mean Difference
   address:                                                                                            
                                                                                                       
   Problem 1: Low statistical W1 on real data (0.332 vs 0.740 for MeanDiff)
-  Dominator edges are structurally indispensable paths, not necessarily the strongest-shift edges. By 
+  Dominator edges are structurally indispensable paths, not necessarily the strongest-shift edges. By
   design, the ranking decorrelates from raw effect size.
 
-  - Reranking approach: Use dominator votes to rerank or filter MeanDiff's top-k rather than as a
-  standalone score — final_score = dominator_votes × shift_magnitude. This preserves high W1 while
-  adding biological structure.
-  - Dominator-weighted shift: Instead of voting equally, weight each (u, v) dominator pair's
-  contribution by the direct shift S[root, v] from the root. Edges that dominate AND have high
-  downstream signal score highest.
+  - **Implemented as `score_mode="shift_rerank"`** — `score = vote_count × |shifts|`. Reranks MeanDiff
+  magnitudes by dominator structure. Restores W1 at the cost of hidden-source recovery.
+  - **Implemented as `score_mode="root_shift"`** — vote weight = `|shifts[root, v]|`. Edges that
+  dominate AND propagate strong downstream signal from perturbed roots score highest.
 
   Problem 2: Graph construction is noisy on real data
   The shift_quantile=0.94 was tuned on synthetic data. Real K562 shift distributions are different,

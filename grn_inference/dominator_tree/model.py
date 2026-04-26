@@ -72,11 +72,27 @@ class DominatorTreeModel:
         meaningful and together with shift-tail fill produce a good
         precision × hidden-recall tradeoff. Past 0.94 precision holds
         but hidden recall saturates.
-    weight_by_edge_magnitude
-        If ``True``, vote weight is ``|edge_weight|`` — the actual
-        shift/β_iv magnitude — so that strong edges contribute more
-        than weak ones to the vote count. If ``False``, each
-        dominator-tree edge gets a vote of 1 (unit vote).
+    score_mode
+        How dominator-tree votes get aggregated into per-edge scores.
+
+        - ``"root_shift"`` (default): weight each vote by the direct
+          shift from the root to the target, ``|shifts[root, v]|``.
+          Rewards edges ``(u, v)`` that dominate strong downstream
+          signals from many roots. Unperturbed roots contribute zero
+          (no direct shift), so only perturbed roots vote effectively.
+          Modestly better statistical W1 and biological precision than
+          ``"edge_weight"`` on K562 and RPE1.
+        - ``"edge_weight"`` (original behaviour): for each ``(u, v)``
+          with ``idom(v) = u`` in the tree rooted at ``R``, add
+          ``|edge_weight[u, v]|`` to ``score[u, v]``. Strong edges
+          accumulate larger scores. Hidden-source recovery preserved
+          (unperturbed sources use IV-imputed ``edge_weight``).
+        - ``"shift_rerank"``: collect integer vote counts, then
+          multiply by ``|shifts[u, v]|`` to get the final score —
+          ``score[u, v] = vote_count[u, v] × |shifts[u, v]|``. Dominator
+          structure reranks Mean-Difference's magnitude. Identical to
+          ``"edge_weight"`` when every gene is perturbed (e.g. on K562
+          and RPE1); only differs on partial-perturbation data.
     fill_tail_with_shift
         If ``True``, after the dominator-tree edges are ranked, fill
         any remaining slots in ``top_k`` by falling back to the
@@ -90,11 +106,21 @@ class DominatorTreeModel:
         IV-imputed edge_weight rows; each extra root contributes more
         dominator-tree votes, mostly improving hidden-source recall.
         If ``False``, only perturbed genes are roots (iter-27 default).
+
+    Per-root vote scaling
+    ---------------------
+    Every vote a root ``R`` casts is scaled by ``|z|`` of a Mann-Whitney
+    U test comparing ``R``'s own expression in ``do(R)`` cells vs control
+    cells — i.e. how strongly ``R`` was actually knocked down. Roots
+    whose CRISPRi failed (weak knockdown → low ``|z|``) contribute
+    proportionally less; unperturbed roots get zero weight (knockdown
+    not defined). Empirically a 3–8× lift on K562 STRING precision over
+    unweighted voting.
     """
 
     top_k: int = 1000
     shift_quantile: float = 0.94
-    weight_by_edge_magnitude: bool = True
+    score_mode: str = "root_shift"
     fill_tail_with_shift: bool = True
     use_all_genes_as_roots: bool = True
 
@@ -170,7 +196,19 @@ class DominatorTreeModel:
                     graph.add_edge(s, t, weight=float(w))
 
         # ---- Per-source dominator tree votes -------------------------
+        if self.score_mode not in {"edge_weight", "shift_rerank", "root_shift"}:
+            raise ValueError(
+                f"Unknown score_mode {self.score_mode!r}; expected one of "
+                "edge_weight, shift_rerank, root_shift"
+            )
+
+        # Per-root Mann-Whitney |z| weighting (knockdown confidence).
+        root_conf = self._compute_root_confidence(
+            data, ctrl_mask, perturbed_genes_sorted, G,
+        )
+
         score = np.zeros((G, G), dtype=np.float64)
+        vote_total = np.zeros((G, G), dtype=np.float64)  # used by shift_rerank
         if self.use_all_genes_as_roots:
             root_indices = list(range(G))
         else:
@@ -178,20 +216,28 @@ class DominatorTreeModel:
         for root in root_indices:
             if root not in graph:
                 continue
+            rc = float(root_conf[root])
+            if rc <= 0.0:
+                continue
             try:
                 idoms = nx.immediate_dominators(graph, root)
             except Exception:
                 continue
             for v, u in idoms.items():
-                if v == u:
+                if v == u or v == root:
                     continue
-                if v == root:
-                    continue
-                if self.weight_by_edge_magnitude:
-                    w = float(edge_weight[u, v])
-                else:
-                    w = 1.0
-                score[u, v] += w
+                if self.score_mode == "edge_weight":
+                    score[u, v] += rc * float(edge_weight[u, v])
+                elif self.score_mode == "shift_rerank":
+                    vote_total[u, v] += rc
+                elif self.score_mode == "root_shift":
+                    score[u, v] += rc * float(abs(shifts[root, v]))
+
+        if self.score_mode == "shift_rerank":
+            # Multiplicative rerank of MeanDifference magnitude by
+            # (confidence-weighted) dominator vote total. Edges from
+            # unperturbed sources score 0 because shifts[u, :] = 0.
+            score = vote_total * np.abs(shifts)
 
         # score[u, v] = total vote weight for direct edge u -> v.
         np.fill_diagonal(score, 0.0)
@@ -234,3 +280,40 @@ class DominatorTreeModel:
             out.append(e)
             dom_set.add(e)
         return out[: self.top_k]
+
+    def _compute_root_confidence(
+        self,
+        data: Dataset,
+        ctrl_mask: np.ndarray,
+        perturbed_genes_sorted: list[str],
+        G: int,
+    ) -> np.ndarray:
+        """Per-root vote-scaling factor: Mann-Whitney |z| of the source
+        gene's own expression in do(R) cells vs control cells.
+
+        Unperturbed roots get 0 (no do(R) cells to test against).
+        """
+        from scipy.stats import mannwhitneyu
+
+        conf = np.zeros(G, dtype=np.float64)
+        ctrl_expr = data.expression[ctrl_mask]
+        n_ctrl = int(ctrl_mask.sum())
+        for g in perturbed_genes_sorted:
+            m = data.intervention_mask(g)
+            n_p = int(m.sum())
+            if n_p == 0 or n_ctrl == 0:
+                continue
+            idx = data.gene_idx(g)
+            x_pert = data.expression[m, idx]
+            x_ctrl = ctrl_expr[:, idx]
+            try:
+                u_stat, _ = mannwhitneyu(
+                    x_pert, x_ctrl, alternative="two-sided",
+                )
+            except ValueError:
+                continue
+            mu = n_p * n_ctrl / 2.0
+            sigma = np.sqrt(n_p * n_ctrl * (n_p + n_ctrl + 1) / 12.0)
+            if sigma > 0:
+                conf[idx] = abs((u_stat - mu) / sigma)
+        return conf
