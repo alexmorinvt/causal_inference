@@ -6,7 +6,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 Simulation-based gene regulatory network (GRN) inference research, targeting the [CausalBench](https://github.com/causalbench/causalbench) benchmark (Chevalley et al. 2025). The benchmark evaluates methods that infer causal gene–gene interaction networks from large-scale perturbational single-cell gene expression data (Perturb-seq).
 
-**Current state**: Stage 0 scaffold (evaluator, baselines, synthetic data) plus a **Stage 1 MVP** — an ensemble linear cyclic SCM fit by moment-matching (`EnsembleSCMFitter` in `grn_inference/ensemble_scm/`). The CausalBench data adapter is still a stub.
+**Current state**: Multiple GRN inference methods implemented and benchmarked on synthetic data. CausalBench real data (K562, RPE1) is loaded and preprocessed; real-data evaluation is in progress.
 
 ## Framing
 
@@ -17,9 +17,12 @@ This is **causal parameter estimation**, not machine learning. We fit the adjace
 ```bash
 conda env create -f environment.yml   # Python 3.11, PyTorch cpuonly, editable install
 conda activate grn-inference
+pip install scanpy openpyxl gdown     # required for CausalBench data loading
 ```
 
 The `environment.yml` has a `pip: -e .` line, so `import grn_inference` works immediately. Update with `conda env update -f environment.yml --prune`.
+
+CausalBench is vendored as a git submodule at `vendor/causalbench` — no separate install needed. The package is installed editable (`pip install -e vendor/causalbench --no-deps`) so `pkg_resources` resolves bundled data files.
 
 ## File Structure
 
@@ -27,58 +30,58 @@ The `environment.yml` has a `pip: -e .` line, so `import grn_inference` works im
 grn_inference/
 ├── environment.yml
 ├── pyproject.toml
-├── grn_inference/               # The package
-│   ├── __init__.py              # Public API — re-exports everything including EnsembleSCMFitter
-│   ├── dataset.py               # Dataset dataclass
-│   ├── data_loaders.py          # make_synthetic_dataset + load_causalbench_dataset stub
-│   ├── evaluator.py             # evaluate_statistical: Wasserstein + FOR
-│   ├── models.py                # MeanDifferenceModel + RandomBaseline (baselines only)
-│   └── ensemble_scm/            # Stage 1 MVP, self-contained module
-│       ├── __init__.py          # Exports EnsembleSCMFitter + helpers
-│       ├── simulator.py         # LinearSCM, simulate_control, simulate_intervention
-│       ├── loss.py              # moment_matching_discrepancy, l1_penalty
-│       ├── fit.py               # fit_scm_ensemble (manual-SGD loop + spectral projection)
-│       └── model.py             # EnsembleSCMFitter (Model-protocol entry point)
+├── vendor/causalbench/              # CausalBench submodule (data access + evaluators)
+├── data/                            # gitignored — h5ad + npz cache (multi-GB)
+├── grn_inference/                   # The package
+│   ├── __init__.py                  # Public API — re-exports all methods
+│   ├── dataset.py                   # Dataset dataclass
+│   ├── data_loaders.py              # make_synthetic_dataset + load_causalbench_dataset
+│   ├── evaluator.py                 # evaluate_statistical: Wasserstein + FOR
+│   ├── models.py                    # Baselines only: MeanDifference, Random, FullyConnected
+│   ├── ensemble_scm/                # Gradient-descent SCM fitter — see README inside
+│   ├── indirect_pruning/            # Cascade-shortcut pruning ranker — see README inside
+│   ├── shift_corr/                  # Shift × within-arm correlation ranker — see README inside
+│   ├── shift_paths/                 # Path-scoring ranker (excluded, issue under investigation)
+│   └── dominator_tree/              # Dominator-tree edge ranker — see README inside
 ├── tests/
 │   ├── test_stage0.py
-│   └── test_scm_fitter.py
+│   ├── test_scm_fitter.py
+│   └── test_dominator_tree.py
 └── scripts/
-    ├── run_baseline.py                # Stage 0 baseline comparison
-    ├── run_scm_fit.py                 # Stage 1 fitter vs baselines (full perturbation)
-    ├── eval_partial_perturbation.py   # n_perturbed=25 + precision@k + matched-W1
-    ├── run_candidate_comparison.py    # Per-candidate vs fused aggregation diagnostic
-    ├── diagnose_divergence.py         # Spectral-radius / Frobenius trajectory
-    ├── max_w1_oracle.py               # Oracle max W1 ceiling
+    ├── run_baseline.py                  # Stage 0 baseline comparison
+    ├── run_scm_fit.py                   # EnsembleSCM vs baselines, full perturbation
+    ├── eval_partial_perturbation.py     # All methods, n_perturbed=25, precision@k + matched-W1
+    ├── run_causalbench_eval.py          # All methods on real K562/RPE1 data
+    ├── run_candidate_comparison.py      # Per-candidate vs fused aggregation diagnostic
+    ├── diagnose_divergence.py           # Spectral-radius / Frobenius trajectory
+    ├── max_w1_oracle.py                 # Oracle max W1 ceiling
     ├── sweep_spectral_threshold.py
     ├── sweep_l1.py
     └── sweep_optimization_hparams.py
 ```
 
-**Layout rule**: each new GRN inference method goes in its own `grn_inference/<method>/` subdirectory with `simulator.py` / `loss.py` / `fit.py` / `model.py` / `__init__.py`. Top-level `models.py` stays reserved for baselines. The method's entry-point class is re-exported from `grn_inference/__init__.py` so `from grn_inference import <Method>Fitter` works.
+**Layout rule**: each new GRN inference method goes in its own `grn_inference/<method>/` subdirectory with a `model.py`, `__init__.py`, and `README.md`. Top-level `models.py` stays reserved for baselines. The method's entry-point class is re-exported from `grn_inference/__init__.py` so `from grn_inference import <Method>` works.
 
 ## Running Things
 
 ```bash
-# Tests (should see 15 passing)
+# Tests (should see 18 passing)
 pytest tests/ -v
 
-# Stage 0 baselines — sanity check
-python scripts/run_baseline.py
+# Synthetic benchmarks
+python scripts/run_baseline.py                 # Stage 0 baselines sanity check
+python scripts/eval_partial_perturbation.py    # All methods, partial-perturbation synthetic
 
-# Stage 1 fitter vs baselines, full perturbation
-python scripts/run_scm_fit.py
+# Real CausalBench data (requires data/k562.h5ad and data/rpe1.h5ad)
+python scripts/run_causalbench_eval.py --dataset k562 --data_dir data
+python scripts/run_causalbench_eval.py --dataset rpe1 --data_dir data
 
-# The interesting benchmark — only half the genes perturbed.
-# Mean Difference structurally can't score edges whose source
-# isn't perturbed; EnsembleSCMFitter can (and does at ~60% recall).
-python scripts/eval_partial_perturbation.py
-
-# Diagnostics (ran during tuning; still useful for reproducing each finding)
+# Diagnostics
 python scripts/max_w1_oracle.py                # W1 ceiling — MD is near it
-python scripts/diagnose_divergence.py          # Step-by-step ρ(W) trajectory
-python scripts/sweep_spectral_threshold.py     # Shows 0.80 is the sweet spot
-python scripts/sweep_l1.py                     # L1 only bites at threshold ≤ 0.9
-python scripts/sweep_optimization_hparams.py   # step_size × n_steps — neither lever helps at threshold=0.95
+python scripts/diagnose_divergence.py          # EnsembleSCM spectral-radius trajectory
+python scripts/sweep_spectral_threshold.py
+python scripts/sweep_l1.py
+python scripts/sweep_optimization_hparams.py
 ```
 
 ## Architecture
@@ -92,6 +95,7 @@ python scripts/sweep_optimization_hparams.py   # step_size × n_steps — neithe
 
 **`Model` protocol** (`grn_inference/models.py`): `fit_predict(data: Dataset) -> list[tuple[str, str]]`
 - Returns a ranked list of `(source, target)` directed edges, already cut to `top_k`. The evaluator does not re-rank.
+- `FullyConnectedBaseline` is the exception — it returns all n*(n-1) edges unranked (no `top_k`).
 
 **`evaluate_statistical`** (`grn_inference/evaluator.py`): takes predicted edges + a Dataset, returns a `StatisticalResult` with:
 - `mean_wasserstein` — precision-like; higher is better. Mean 1-D Wasserstein distance between `P(B | control)` and `P(B | do(A))` for each predicted `A → B`.
@@ -103,52 +107,25 @@ The Wasserstein metric is near-saturated by Mean Difference (see `scripts/max_w1
 
 - **`MeanDifferenceModel`**: scores `(A, B)` by `|mean(B | do(A)) − mean(B | control)|`. The CausalBench SOTA-class baseline. Near-oracle on W1.
 - **`RandomBaseline`**: uniform random edges over perturbed sources. Sanity floor.
+- **`FullyConnectedBaseline`**: returns all n*(n-1) directed edges unranked (port of CausalBench's `FullyConnected`). Perfect recall by construction. Use to establish the recall ceiling.
 
-### EnsembleSCMFitter (`grn_inference/ensemble_scm/`)
+### Methods (one README per method)
 
-An ensemble of N parameterised linear cyclic SCMs, fit by gradient descent to match the observed per-perturbation distributions. Procedure per step:
-1. Sample an arm from `{control} ∪ {perturbed genes}`.
-2. Simulate `batch_size` cells per candidate from that arm via `x = (I − W)⁻¹ ε` (batched over candidates in one solve).
-3. `moment_matching_discrepancy(sim, real)` per candidate; sum + L1 penalty.
-4. `torch.autograd.grad` → manual SGD step on `W`.
-5. **Spectral-radius projection**: if `ρ(W_k) > spectral_threshold`, rescale `W_k` uniformly so `ρ = spectral_threshold`. Critical for stability.
+| Method | Module | Key idea |
+|---|---|---|
+| `EnsembleSCMFitter` | `ensemble_scm/` | Gradient-descent SCM fit; recovers hidden-source edges |
+| `DominatorTreeModel` | `dominator_tree/` | Dominator-tree votes; best precision on hidden sources among shift methods |
+| `IndirectPruningModel` | `indirect_pruning/` | Prune cascade shortcuts from shift graph |
+| `ShiftCorrModel` | `shift_corr/` | Shift × within-arm correlation |
+| `ShiftPathsModel` | `shift_paths/` | Path-scoring (excluded — issue under investigation) |
 
-After `n_steps`, aggregate `|W|` across candidates with a **generalised mean** `(mean_k |W_k|ᵖ)^(1/p)` (default p=3 — biased toward max but not pure max), zero diagonals, return top-k edges.
+See each method's `README.md` for algorithm details, hyperparameter notes, and failure modes.
 
-### Key defaults and what they mean
+### Data
 
-- `spectral_threshold = 0.80` — matches the synthetic generator's `target_spectral_radius`. Do not raise above ~0.9; see the failure mode below.
-- `n_steps = 1000`, `step_size = 0.01` — saturated; more iterations / smaller step don't help (spectral projection dominates). Lowering the threshold is what unlocks further tuning.
-- `l1_lambda = 1e-4` — weak. Only bites once `spectral_threshold ≤ 0.9`; above that, the threshold clamp dominates and L1 does nothing. At threshold=0.80, the sweet spot is ~1e-4 to 1e-3; `l1 = 1.0` collapses structure.
-- `aggregation_power = 3.0` — "close to a mean but biased toward max"; the user's requested behaviour.
+**Synthetic**: `make_synthetic_dataset(n_genes, n_perturbed_genes=None, ...)` generates cells from a known linear cyclic SCM via a branching lineage cascade. Returns `(Dataset, SyntheticTruth)` with ground-truth edges. Pass `n_perturbed_genes` to limit intervention arms — crucial for testing hidden-source recovery.
 
-### Failure modes to watch for
-
-- **Divergence**: without spectral projection, every candidate's `ρ(W)` crosses 1 by step 4–5 and shoots to 10¹³ within a few more steps. The fit is unrecoverable afterwards. `scripts/diagnose_divergence.py` shows the trajectory.
-- **Discrepancy plateau at 10⁴–10⁵**: symptom of `spectral_threshold` being too high (typically 0.95). The simulator over-amplifies by 4× relative to the data. Lower the threshold toward 0.8.
-- **Dense fitted W**: small L1 + loose threshold → `|W|` has no natural zeros, ranker has to pick `top_k` from noise. Either lower threshold (main fix) or raise L1 modestly.
-
-### Synthetic Data
-
-`make_synthetic_dataset(n_genes, n_perturbed_genes=None, ...)` generates cells from a known linear cyclic SCM:
-
-```
-x = (I − W)^{-1} ε
-```
-
-Interventions are soft knockdowns (zero out target's row in W, scale its emission). Returns `(Dataset, SyntheticTruth)` where `SyntheticTruth.true_edges` is the ground-truth edge list and `SyntheticTruth.W` is the adjacency matrix (`W[i,j]` nonzero means `j → i`).
-
-Pass `n_perturbed_genes` (e.g. `n_genes // 2`) to limit which genes get intervention arms. The rest become "hidden" sources — edges from them are invisible to any method that ranks by intervention effect (Mean Difference gets zero such hits; `EnsembleSCMFitter` gets ~60% recall on them because it fits a generative model that has to explain observational structure too).
-
-### CausalBench Adapter
-
-`load_causalbench_dataset()` in `data_loaders.py` is a **stub** — it raises `NotImplementedError`. To use real Perturb-seq data:
-
-1. `pip install causalbench`
-2. Inspect `causalscbench/data_access/create_dataset.py` in the installed package.
-3. Fill in the TODO in `data_loaders.py`.
-
-Available datasets: `"weissmann_k562"` (K562, day 6) and `"weissmann_rpe1"` (RPE1, day 7).
+**CausalBench**: `load_causalbench_dataset(dataset_name, data_directory, filter=True)` loads and preprocesses the Replogle Perturb-seq data from cached `.npz` files. `filter=True` applies CausalBench's strong-perturbation filter (>50 DEGs, ≤−30% knockdown, >25 cells). Available: `"weissmann_k562"` (622 genes, 129k cells filtered) and `"weissmann_rpe1"` (383 genes, 92k cells filtered). The raw `.h5ad` files (~10 GB each) must be placed in `data/` manually (Figshare blocks automated downloads).
 
 ## Conventions
 
