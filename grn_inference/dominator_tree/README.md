@@ -33,3 +33,56 @@ At top_k=100:
 
 Only method besides EnsembleSCMFitter that recovers hidden-source edges.
 At matched W1=0.50: finds 134 true hits (66 hidden) vs 108/0 for Mean Difference.
+
+## Future directions
+ Looking at the benchmark results and the algorithm, there are several distinct failure modes to     
+  address:                                                                                            
+                                                                                                      
+  Problem 1: Low statistical W1 on real data (0.332 vs 0.740 for MeanDiff)
+  Dominator edges are structurally indispensable paths, not necessarily the strongest-shift edges. By 
+  design, the ranking decorrelates from raw effect size.
+
+  - Reranking approach: Use dominator votes to rerank or filter MeanDiff's top-k rather than as a
+  standalone score — final_score = dominator_votes × shift_magnitude. This preserves high W1 while
+  adding biological structure.
+  - Dominator-weighted shift: Instead of voting equally, weight each (u, v) dominator pair's
+  contribution by the direct shift S[root, v] from the root. Edges that dominate AND have high
+  downstream signal score highest.
+
+  Problem 2: Graph construction is noisy on real data
+  The shift_quantile=0.94 was tuned on synthetic data. Real K562 shift distributions are different,
+  and edges passing the threshold may be noise.
+
+  - Replace raw shift with statistical significance (Mann-Whitney p-value or effect size / within-arm
+  std) as the edge weight — filters sampling noise rather than just magnitude.
+  - Adaptive quantile: Pick the quantile that produces a target average out-degree (e.g., 3–5 edges
+  per source), data-adaptively.
+
+  Problem 3: All roots weighted equally
+  A root gene with weak knockdown (low shift, escaped cells) produces an unreliable dominator tree —
+  but contributes the same vote weight as a strongly knocked-down gene.
+
+  - Weight roots by knockdown confidence: Scale each root's vote contribution by mean_shift(root) or
+  its Mann-Whitney z-score against control. Noisy roots contribute less.
+
+  Problem 4: IV imputation for unperturbed sources is a rough heuristic
+  β_iv[s, t] = ⟨s_s, s_t⟩ / ⟨s_s, s_s⟩ is just a dot product ratio — very sensitive to noise. On real
+  data with 622 noisy shift rows, the IV-imputed edges for unperturbed genes will often be
+  meaningless.
+
+  - Restrict to perturbed roots only on real data (set use_all_genes_as_roots=False) and skip IV
+  imputation — fewer but cleaner votes.
+  - Or use a proper 2SLS estimate with the guide assignment as instrument.
+
+  Problem 5: fill_tail_with_shift dilutes the signal
+  After dominator edges run out (~O(G) per root), the tail is filled with plain MeanDiff edges. At
+  top_k=1000 on 622 genes this tail is large and just replicates MeanDiff.
+
+  - Don't fill the tail — return fewer edges with higher dominator confidence rather than padding with
+   MeanDiff. Evaluate at whatever k the dominator method naturally produces.
+
+  ---
+  Highest-leverage starting point: The reranking approach (Problem 1) — final_score = dominator_votes
+  × shift — is a one-line change that could dramatically improve W1 while retaining the hidden-source
+  recovery advantage. Everything else is about improving the graph construction quality, which matters
+   more on real than synthetic data.
