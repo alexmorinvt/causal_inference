@@ -5,12 +5,16 @@ Every model conforms to the :class:`Model` protocol: given a
 directed ``(source, target)`` edges. The list is already truncated to
 the model's chosen ``top_k``; the evaluator does not re-rank.
 
-Two baselines live here:
+Baselines:
 
 - :class:`RandomBaseline` — obvious sanity floor.
 - :class:`MeanDifferenceModel` — the current CausalBench SOTA-class
   baseline (Kowiel et al., 2023). Score each pair ``(A, B)`` by
   ``|mean(B | do(A)) - mean(B | control)|``, keep the top-k.
+- :class:`FullyConnectedBaseline` — returns all n*(n-1) directed edges
+  unranked (CausalBench "fully-connected" model). Has perfect recall by
+  construction since every true edge is predicted. Not top_k-limited;
+  use it to establish the recall ceiling and verify FOR → 0 at full scale.
 
 Anything your new method does should beat ``MeanDifferenceModel`` on
 the statistical metric before you consider it working.
@@ -144,3 +148,34 @@ class MeanDifferenceModel:
                 continue
             edges.append((perturbed[row], data.gene_names[col]))
         return edges
+
+
+# ---------------------------------------------------------------------
+# Fully Connected baseline
+# ---------------------------------------------------------------------
+@dataclass
+class FullyConnectedBaseline:
+    """Return every directed edge — a faithful port of CausalBench's FullyConnected model.
+
+    Achieves perfect recall by construction: every true edge is in the
+    predicted set. Has no ranking; edges are shuffled with ``seed`` so
+    evaluation at any top_k prefix is a random sample. Use to establish
+    the recall ceiling and to verify that FOR → 0 as k → n*(n-1).
+
+    Note: n*(n-1) can be large (~386k for K562). Evaluating the full list
+    with ``evaluate_statistical`` is slow; use ``top_k`` to sample a prefix.
+    """
+
+    seed: int = 0
+
+    def fit_predict(self, data: Dataset) -> list[Edge]:
+        genes = data.gene_names
+        edges: list[Edge] = [
+            (a, b)
+            for i, a in enumerate(genes)
+            for b in genes
+            if a != b
+        ]
+        rng = np.random.default_rng(self.seed)
+        idx = rng.permutation(len(edges))
+        return [edges[i] for i in idx]

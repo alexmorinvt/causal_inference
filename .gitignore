@@ -11,7 +11,8 @@ dist/
 venv/
 .env
 
-# CausalBench cache — can be multi-GB
+# CausalBench data and cache — can be multi-GB
+data/
 data_cache/
 outputs/
 

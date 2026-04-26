@@ -382,6 +382,7 @@ def make_synthetic_dataset(
 def load_causalbench_dataset(
     dataset_name: str,
     data_directory: str,
+    filter: bool = True,
     subset_genes: list[str] | None = None,
     subset_cells: int | None = None,
     seed: int = 0,
@@ -398,6 +399,13 @@ def load_causalbench_dataset(
         first time this runs it will download and preprocess the
         Replogle Perturb-seq data (multi-GB, takes a while). After
         that it's fast.
+    filter
+        If ``True`` (default), apply CausalBench's strong-perturbation
+        filter: keeps only genes with >50 DEGs, ≤-30% knockdown, and
+        >25 cells (per the Replogle et al. summary stats), and filters
+        cells to those where the target gene is below the 10th percentile
+        of control. This matches the CausalBench benchmark regime.
+        Set ``False`` to load the full unfiltered dataset.
     subset_genes
         Optional gene list to restrict to. Useful for the mini-dataset
         regime — pass ~300 genes for fast iteration.
@@ -406,29 +414,6 @@ def load_causalbench_dataset(
         preserving stratification by intervention target.
     seed
         For cell subsampling.
-
-    Notes
-    -----
-    This is a **stub**. The ``causalbench`` package's internal
-    ``data_access`` module has shifted across versions. Steps:
-
-    1. ``pip install causalbench``
-    2. Inspect ``causalscbench/data_access/create_dataset.py`` (or the
-       equivalent in your version) to find the function that returns
-       ``(expression_matrix, interventions, gene_names)`` from the
-       cached data.
-    3. Fill in the TODO below.
-
-    When in doubt, run the CLI once:
-
-        causalbench_run --dataset_name weissmann_k562 \\
-            --output_directory /tmp/out \\
-            --data_directory {data_directory} \\
-            --training_regime observational \\
-            --model_name pc --subset_data 0.01
-
-    That forces CausalBench to download and preprocess; afterwards the
-    ``data_directory`` will contain the arrays this function needs.
     """
     import sys
     from pathlib import Path
@@ -450,7 +435,7 @@ def load_causalbench_dataset(
             "Use 'weissmann_k562' or 'weissmann_rpe1'."
         )
 
-    loader = CreateDataset(data_directory=data_directory, filter=False)
+    loader = CreateDataset(data_directory=data_directory, filter=filter)
     path_k562, path_rpe1 = loader.load()
     npz_path = path_k562 if key == "k562" else path_rpe1
 

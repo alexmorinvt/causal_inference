@@ -10,7 +10,7 @@ from .dominator_tree import DominatorTreeModel
 from .ensemble_scm import EnsembleSCMFitter
 from .evaluator import StatisticalResult, evaluate_statistical
 from .indirect_pruning import IndirectPruningModel
-from .models import MeanDifferenceModel, Model, RandomBaseline
+from .models import FullyConnectedBaseline, MeanDifferenceModel, Model, RandomBaseline
 from .shift_corr import ShiftCorrModel
 from .shift_paths import ShiftPathsModel
 
@@ -19,6 +19,7 @@ __all__ = [
     "Dataset",
     "DominatorTreeModel",
     "EnsembleSCMFitter",
+    "FullyConnectedBaseline",
     "IndirectPruningModel",
     "MeanDifferenceModel",
     "Model",
