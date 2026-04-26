@@ -13,7 +13,6 @@ any alternative route.
 2. For each root (perturbed gene, or all genes if `use_all_genes_as_roots=True`), compute the Lengauer–Tarjan dominator tree via `networkx.immediate_dominators`.
 3. For each reachable node v with immediate dominator u, cast a vote for edge `(u, v)` weighted by `|edge_weight[u, v]|` (if `weight_by_edge_magnitude=True`) or 1.
 4. Rank edges by total vote count across all root trees.
-5. If `fill_tail_with_shift=True`, fill remaining top_k slots with unselected edges ordered by raw shift magnitude.
 
 ## Key hyperparameters
 
@@ -22,7 +21,6 @@ any alternative route.
 | `shift_quantile` | 0.94 | Graph sparsity threshold. At q ≤ 0.88 the graph is too dense (dominators collapse to root); at q ≥ 0.94 dominator trees are meaningful. Selected by train sweep. |
 | `use_all_genes_as_roots` | True | Compute dominator trees from every gene as root (unperturbed roots use IV-imputed edges). Improves hidden-source recall. |
 | `score_mode` | `"root_shift"` | How votes aggregate. See "Score modes" below. |
-| `fill_tail_with_shift` | True | Fill remaining top_k slots with shift-ranked edges not already selected. |
 | `top_k` | 1000 | Max edges returned. |
 
 ## Score modes
@@ -131,12 +129,12 @@ At matched W1=0.50: finds 134 true hits (66 hidden) vs 108/0 for Mean Difference
   imputation — fewer but cleaner votes.
   - Or use a proper 2SLS estimate with the guide assignment as instrument.
 
-  Problem 5: fill_tail_with_shift dilutes the signal
-  After dominator edges run out (~O(G) per root), the tail is filled with plain MeanDiff edges. At
-  top_k=1000 on 622 genes this tail is large and just replicates MeanDiff.
-
-  - Don't fill the tail — return fewer edges with higher dominator confidence rather than padding with
-   MeanDiff. Evaluate at whatever k the dominator method naturally produces.
+  ~~Problem 5: fill_tail_with_shift dilutes the signal~~ — **resolved**.
+  Diagnostic showed the tail-fill never engaged on K562 because
+  dominator votes (with `use_all_genes_as_roots=True`, ~G² potential
+  pairs aggregating across G roots) produce ≥20K nonzero-score edges,
+  far more than `top_k=1000`. The parameter was dead code on full-
+  perturbation datasets and has been removed.
 
   ---
   Highest-leverage starting point: The reranking approach (Problem 1) — final_score = dominator_votes

@@ -93,13 +93,6 @@ class DominatorTreeModel:
           structure reranks Mean-Difference's magnitude. Identical to
           ``"edge_weight"`` when every gene is perturbed (e.g. on K562
           and RPE1); only differs on partial-perturbation data.
-    fill_tail_with_shift
-        If ``True``, after the dominator-tree edges are ranked, fill
-        any remaining slots in ``top_k`` by falling back to the
-        shift-magnitude ranking (``|shift|`` for perturbed sources,
-        ``|β_iv|`` for unperturbed) over edges not already selected.
-        Dominator trees produce only O(G) edges per source root, so
-        this is usually necessary to reach ``top_k = 1000``.
     use_all_genes_as_roots
         If ``True``, compute dominator trees rooted at *every* gene,
         not just the perturbed ones. Unperturbed roots rely on the
@@ -121,7 +114,6 @@ class DominatorTreeModel:
     top_k: int = 1000
     shift_quantile: float = 0.94
     score_mode: str = "root_shift"
-    fill_tail_with_shift: bool = True
     use_all_genes_as_roots: bool = True
 
     def fit_predict(self, data: Dataset) -> list[Edge]:
@@ -248,38 +240,12 @@ class DominatorTreeModel:
         nonzero_order = np.argsort(-flat)
         nonzero_order = nonzero_order[flat[nonzero_order] > 0.0]
         dom_edges: list[Edge] = []
-        dom_set: set[Edge] = set()
-        for idx in nonzero_order:
+        for idx in nonzero_order[: self.top_k]:
             u, v = divmod(int(idx), G)
             if u == v:
                 continue
-            e = (names[u], names[v])
-            dom_edges.append(e)
-            dom_set.add(e)
-
-        if len(dom_edges) >= self.top_k or not self.fill_tail_with_shift:
-            return dom_edges[: self.top_k]
-
-        # ---- Fill tail with shift/β_iv ranking -----------------------
-        # Use the same edge_weight matrix (shift for perturbed, β_iv
-        # rescaled for unperturbed). Skip edges already selected.
-        tail_flat = edge_weight.ravel()
-        tail_order = np.argsort(-tail_flat)
-        out = list(dom_edges)
-        for idx in tail_order:
-            if len(out) >= self.top_k:
-                break
-            if tail_flat[idx] <= 0.0:
-                break
-            s, t = divmod(int(idx), G)
-            if s == t:
-                continue
-            e = (names[s], names[t])
-            if e in dom_set:
-                continue
-            out.append(e)
-            dom_set.add(e)
-        return out[: self.top_k]
+            dom_edges.append((names[u], names[v]))
+        return dom_edges
 
     def _compute_root_confidence(
         self,
