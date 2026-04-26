@@ -430,35 +430,62 @@ def load_causalbench_dataset(
     That forces CausalBench to download and preprocess; afterwards the
     ``data_directory`` will contain the arrays this function needs.
     """
-    raise NotImplementedError(
-        "Fill in this stub by importing from causalscbench.data_access. "
-        "Read the docstring for the steps. Until you do, use "
-        "make_synthetic_dataset() for everything."
+    import sys
+    from pathlib import Path
+
+    vendor_path = str(Path(__file__).parent.parent / "vendor" / "causalbench")
+    if vendor_path not in sys.path:
+        sys.path.insert(0, vendor_path)
+
+    from causalscbench.data_access.create_dataset import CreateDataset
+
+    name = dataset_name.lower()
+    if "k562" in name:
+        key = "k562"
+    elif "rpe1" in name:
+        key = "rpe1"
+    else:
+        raise ValueError(
+            f"Unknown dataset_name {dataset_name!r}. "
+            "Use 'weissmann_k562' or 'weissmann_rpe1'."
+        )
+
+    loader = CreateDataset(data_directory=data_directory, filter=False)
+    path_k562, path_rpe1 = loader.load()
+    npz_path = path_k562 if key == "k562" else path_rpe1
+
+    raw = np.load(npz_path, allow_pickle=True)
+    expression = np.asarray(raw["expression_matrix"], dtype=np.float32)
+    gene_names = list(raw["var_names"])
+    interventions_raw = list(raw["interventions"])
+
+    # Drop cells whose perturbation target had <100 cells (marked "excluded")
+    # and keep only control + valid intervention cells.
+    keep_mask = np.array([iv != "excluded" for iv in interventions_raw], dtype=bool)
+    expression = expression[keep_mask]
+    interventions = [iv for iv, k in zip(interventions_raw, keep_mask) if k]
+
+    dataset = Dataset(
+        expression=expression,
+        interventions=interventions,
+        gene_names=gene_names,
     )
 
-    # --------------------------------------------------------------------
-    # Skeleton once you have the causalbench imports figured out:
-    # --------------------------------------------------------------------
-    # from causalscbench.data_access.create_dataset import CreateDataset
-    # loader = CreateDataset(data_directory=data_directory, dataset_name=dataset_name)
-    # expression, interventions, gene_names = loader.load()
-    #
-    # # Note: CausalBench uses empty string "" for control cells in some
-    # # versions and "non-targeting" in others. Normalise to our CONTROL_LABEL.
-    # interventions = [iv if iv else CONTROL_LABEL for iv in interventions]
-    #
-    # dataset = Dataset(
-    #     expression=np.asarray(expression, dtype=np.float32),
-    #     interventions=list(interventions),
-    #     gene_names=list(gene_names),
-    # )
-    # if subset_genes is not None:
-    #     dataset = dataset.subset_genes(subset_genes)
-    # if subset_cells is not None and dataset.n_cells > subset_cells:
-    #     rng = np.random.default_rng(seed)
-    #     # Stratified subsample: keep proportional counts per intervention.
-    #     idx = _stratified_subsample(dataset.interventions, subset_cells, rng)
-    #     mask = np.zeros(dataset.n_cells, dtype=bool)
-    #     mask[idx] = True
-    #     dataset = dataset.subset_cells(mask)
-    # return dataset
+    if subset_genes is not None:
+        dataset = dataset.subset_genes(subset_genes)
+
+    if subset_cells is not None and dataset.n_cells > subset_cells:
+        rng = np.random.default_rng(seed)
+        # Stratified subsample: preserve proportional counts per intervention.
+        unique_ivs = list(dict.fromkeys(dataset.interventions))
+        indices: list[int] = []
+        for iv in unique_ivs:
+            iv_idx = [i for i, v in enumerate(dataset.interventions) if v == iv]
+            n_keep = max(1, round(subset_cells * len(iv_idx) / dataset.n_cells))
+            chosen = rng.choice(iv_idx, size=min(n_keep, len(iv_idx)), replace=False)
+            indices.extend(chosen.tolist())
+        mask = np.zeros(dataset.n_cells, dtype=bool)
+        mask[indices] = True
+        dataset = dataset.subset_cells(mask)
+
+    return dataset

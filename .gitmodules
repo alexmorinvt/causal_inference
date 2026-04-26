@@ -1,3 +1,6 @@
 [submodule "causalbench"]
 	path = causalbench
 	url = https://github.com/causalbench/causalbench.git
+[submodule "vendor/causalbench"]
+	path = vendor/causalbench
+	url = https://github.com/causalbench/causalbench
