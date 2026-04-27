@@ -17,14 +17,17 @@ any alternative route.
    IV-regression proxy `β_iv[s, t] = ⟨s_s, s_t⟩ / ⟨s_s, s_s⟩`,
    rescaled to match the perturbed-row effect-size magnitude. Keep
    only edges with `edge_weight ≥ shift_quantile`.
-2. For each root R (every gene if `use_all_genes_as_roots=True`),
-   compute the Lengauer–Tarjan dominator tree via
-   `networkx.immediate_dominators`.
+2. For each **perturbed** gene R, compute the Lengauer–Tarjan
+   dominator tree of `G_shift` rooted at R via
+   `networkx.immediate_dominators`. Unperturbed roots are skipped:
+   `MW_z(R)` is undefined for them (no do(R) cells), so their votes
+   wouldn't contribute. The IV-imputed unperturbed source rows still
+   participate as edges in the graph — they let cascade routes
+   through unperturbed genes appear in perturbed roots' trees.
 3. For each reachable node v with immediate dominator u, add
    `MW_z(R) × |edge_weight[u, v]|` to `score[u, v]`, where `MW_z(R)`
    is the Mann-Whitney |z| of R's own expression in do(R) cells vs
-   control. Roots with weak knockdown contribute less; unperturbed
-   roots contribute zero.
+   control. Roots with weak knockdown contribute less.
 4. Rank edges by aggregated `score`.
 
 ## Key hyperparameters
@@ -32,7 +35,6 @@ any alternative route.
 | Parameter | Default | Notes |
 |---|---|---|
 | `shift_quantile` | 0.94 | Graph sparsity threshold (applied to effect-size weights). At q ≤ 0.88 the graph is too dense; at q ≥ 0.94 dominator trees become meaningful. |
-| `use_all_genes_as_roots` | True | Compute dominator trees from every gene as root. On full-perturbation data the unperturbed branch is unused (MW-|z| = 0 for unperturbed roots) so this is a no-op there. |
 | `top_k` | 1000 | Max edges returned. |
 
 The two main heuristics — effect-size edge weights and Mann-Whitney
@@ -67,21 +69,19 @@ At matched W1=0.50: finds 134 true hits (66 hidden) vs 108/0 for Mean Difference
 ## Future Paths
 High leverage (likely real wins)                                                              
                                                                                                 
-  1. use_all_genes_as_roots=True is currently dead code. The MW-|z| confidence (always on)      
-  returns 0 for unperturbed genes, so the if rc <= 0.0: continue at line 249 skips every
-  unperturbed root anyway. The toggle has no effect on votes. Either:                           
-  - Drop the parameter and the IV-imputation-for-unperturbed-source-rows-as-roots branch
-  entirely, or                                                                                  
-  - Give unperturbed roots a non-zero confidence (e.g., median perturbed |z| × IV-row-norm) so
-  they actually contribute.                                                                     
-                                                                                                
-  The IV imputation still legitimately affects graph topology (cascade routers exist for
-  perturbed roots' trees), so don't remove that — just stop pretending unperturbed roots vote.  
-                  
-  2. shift_rerank mode is dead on full-perturbation data. README already admits it's identical  
-  to edge_weight on K562/RPE1. Three score modes is two too many; collapse to root_shift
-  (default) + edge_weight (legacy). One fewer axis to sweep.                                    
-                  
+  ~~1. use_all_genes_as_roots=True is currently dead code.~~ — **resolved**.
+  The parameter has been dropped; the iteration over roots now starts from
+  `perturbed_genes_sorted` directly. The IV-imputation branch still
+  contributes to graph topology (cascade routes through unperturbed
+  genes appear in perturbed roots' trees) — we just stopped iterating
+  unperturbed roots whose votes were silently skipped by MW-|z| = 0.
+  Option B (give unperturbed roots a non-zero confidence) is still
+  open if we revisit hidden-source recovery on synthetic.
+
+  ~~2. shift_rerank mode is dead on full-perturbation data.~~ — **resolved**.
+  The score_mode parameter is gone; only the noise-normalised
+  effect-size + edge_weight + MW-|z| pipeline remains.
+
   3. Vectorise graph construction. Lines 219–225 are an O(G²) Python loop — 387K iterations on  
   K562. Replace with:
   mask = (edge_weight >= cutoff) & (edge_weight > 0)                                            

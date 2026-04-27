@@ -76,18 +76,20 @@ class DominatorTreeModel:
         and the resulting immediate-dominator pairs are more
         discriminating. ``0.94`` selected by train sweep on the
         magnitude variant; effect-size distributions are similar.
-    use_all_genes_as_roots
-        If ``True``, compute dominator trees rooted at *every* gene,
-        not just the perturbed ones. Unperturbed roots rely on the
-        IV-imputed edge_weight rows; each extra root contributes more
-        dominator-tree votes, mostly improving hidden-source recall on
-        partial-perturbation datasets. (On full-perturbation real data
-        every gene is perturbed, so the toggle has no effect.)
+
+    Notes
+    -----
+    Only perturbed genes are used as dominator-tree roots: unperturbed
+    roots have ``MW_z(R) = 0`` (no do(R) cells to test against), so
+    their votes wouldn't count anyway. The IV-imputed unperturbed
+    source rows still participate as edges in the graph (they let
+    cascade routes through unperturbed genes appear in perturbed
+    roots' trees) — only the iteration of unperturbed roots is
+    skipped.
     """
 
     top_k: int = 1000
     shift_quantile: float = 0.94
-    use_all_genes_as_roots: bool = True
 
     def fit_predict(self, data: Dataset) -> list[Edge]:
         ctrl_mask = data.control_mask()
@@ -169,13 +171,12 @@ class DominatorTreeModel:
             data, ctrl_mask, perturbed_genes_sorted, G,
         )
 
-        # ---- Dominator-tree votes -----------------------------------
+        # ---- Dominator-tree votes (perturbed roots only) ------------
+        # Unperturbed roots have MW_z = 0 so their votes wouldn't count;
+        # skip the iteration entirely.
         score = np.zeros((G, G), dtype=np.float64)
-        if self.use_all_genes_as_roots:
-            root_indices = list(range(G))
-        else:
-            root_indices = [data.gene_idx(g) for g in perturbed_genes_sorted]
-        for root in root_indices:
+        for g in perturbed_genes_sorted:
+            root = data.gene_idx(g)
             if root not in graph:
                 continue
             rc = float(root_conf[root])
