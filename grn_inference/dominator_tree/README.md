@@ -15,8 +15,10 @@ any alternative route.
    combines the do(s) and control variances of target gene t (Cohen's
    d denominator). For unperturbed source rows, edges come from an
    IV-regression proxy `β_iv[s, t] = ⟨s_s, s_t⟩ / ⟨s_s, s_s⟩`,
-   rescaled to match the perturbed-row effect-size magnitude. Keep
-   only edges with `edge_weight ≥ shift_quantile`.
+   rescaled to match the perturbed-row effect-size magnitude. Apply
+   the `shift_quantile` threshold **per source row** (not globally),
+   so every source contributes a balanced number of outgoing edges
+   regardless of its overall shift magnitude.
 2. For each **perturbed** gene R, compute the Lengauer–Tarjan
    dominator tree of `G_shift` rooted at R via
    `networkx.immediate_dominators`. Unperturbed roots are skipped:
@@ -34,7 +36,7 @@ any alternative route.
 
 | Parameter | Default | Notes |
 |---|---|---|
-| `shift_quantile` | 0.94 | Graph sparsity threshold (applied to effect-size weights). At q ≤ 0.88 the graph is too dense; at q ≥ 0.94 dominator trees become meaningful. |
+| `shift_quantile` | 0.94 | Per-source quantile threshold (applied to effect-size weights). At q ≤ 0.88 the graph is too dense; at q ≥ 0.94 dominator trees become meaningful. |
 | `top_k` | 1000 | Max edges returned. |
 
 The two main heuristics — effect-size edge weights and Mann-Whitney
@@ -46,16 +48,24 @@ a clear win across both K562 and RPE1.
 
 | Method | K562 STRING net top_250 | K562 STRING phys top_500 | RPE1 STRING net top_500 |
 |---|---|---|---|
-| MeanDifference (anchor)         | 0.068 | 0.088 | 0.012 |
-| ShiftCorr (anchor)              | 0.268 | 0.252 | 0.012 |
-| DT (raw shift, no MW weighting) | 0.048 | 0.012 | 0.012 |
-| DT (raw shift + MW |z|)         | 0.152 | 0.182 | 0.024 |
-| **DT (effect-size + MW |z|)**   | **0.388** | **0.402** | **0.038** |
+| MeanDifference (anchor)               | 0.068 | 0.088 | 0.012 |
+| ShiftCorr (anchor)                    | 0.268 | 0.252 | 0.012 |
+| DT (raw shift, no MW weighting)       | 0.048 | 0.012 | 0.012 |
+| DT (raw shift + MW |z|)               | 0.152 | 0.182 | 0.024 |
+| DT (effect-size + MW |z|, global thr) | 0.388 | 0.402 | 0.038 |
+| **DT (current default: + per-source thr)** | **0.556** | **0.532** | 0.032 |
 
-The current implementation (effect-size + MW |z|) beats ShiftCorr by
-**45 %** on K562 STRING net and **60 %** on K562 STRING physical at
-top_500, and is the only method that meaningfully exceeds random on
-RPE1 STRING (though absolute numbers are still small — RPE1 is hard).
+The current default (effect-size edge weights + MW |z| root weighting +
+per-source quantile thresholding) beats ShiftCorr by **2.1× on K562
+STRING net** and **2.1× on K562 STRING physical** at top_500. Per-source
+thresholding alone added a further +14 pp on K562 over the global-quantile
+variant. RPE1 STRING numbers are still small but DT remains the only
+method consistently above MD/ShiftCorr.
+
+A separate experiment that *also* down-weighted noisy sources' outgoing
+edges (multiply each row by `MW_z(s) / median(MW_z)`) was tested and
+rejected: it slightly compressed the K562 wins from per-source
+thresholding (0.524 vs 0.556 at top_250) without compounding cleanly.
 
 ## Benchmark results (synthetic, n_genes=50, n_perturbed=25)
 

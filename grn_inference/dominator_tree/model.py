@@ -81,11 +81,25 @@ class DominatorTreeModel:
     -----
     Only perturbed genes are used as dominator-tree roots: unperturbed
     roots have ``MW_z(R) = 0`` (no do(R) cells to test against), so
-    their votes wouldn't count anyway. The IV-imputed unperturbed
-    source rows still participate as edges in the graph (they let
-    cascade routes through unperturbed genes appear in perturbed
-    roots' trees) — only the iteration of unperturbed roots is
-    skipped.
+    their votes wouldn't count. The IV-imputed unperturbed source rows
+    still participate as edges in the graph — they let cascade routes
+    through unperturbed genes appear in perturbed roots' trees.
+
+    Hidden-source recovery happens through this indirect mechanism:
+    when a perturbed root R's dominator tree has an unperturbed gene
+    U as ``idom(v)``, the ``(U, v)`` edge collects a vote even though
+    U is never iterated as a root.
+
+    A surrogate-confidence experiment that gave unperturbed roots
+    their own dominator-tree votes
+    (``median(perturbed |z|) × mean(|edge_weight[R, :]|)``) was tested
+    and rejected on both synthetic (n_perturbed = n_genes / 2) and
+    partial real K562 (50 % of arms kept). It hurt STRING precision by
+    1–4 pp at every top_k and dropped synthetic hidden-src precision
+    from 0.20 to 0.14 (top_k=250). The extra unperturbed-root votes
+    flow into the same (u, v) cells as perturbed-root votes, diluting
+    the cleaner indirect-mechanism contributions rather than surfacing
+    new unperturbed-source edges.
     """
 
     top_k: int = 1000
@@ -148,23 +162,30 @@ class DominatorTreeModel:
                     edge_weight[s, :] = np.abs(beta_iv[s, :]) * scale
         np.fill_diagonal(edge_weight, 0.0)
 
-        # ---- Threshold to sparse graph -------------------------------
-        nonzero = edge_weight[edge_weight > 0.0]
-        if nonzero.size == 0:
+        # ---- Per-source quantile threshold to sparse graph ----------
+        # Each row gets its own quantile cutoff, equalising graph
+        # contribution across sources. A global quantile let strong-
+        # shift sources dominate; per-source thresholding gave +14 pp
+        # K562 STRING net at top_500 with negligible RPE1 cost.
+        if not (edge_weight > 0).any():
             return []
-        cutoff = float(np.quantile(nonzero, self.shift_quantile))
+        mask = np.zeros_like(edge_weight, dtype=bool)
+        for s in range(G):
+            row = edge_weight[s, :]
+            row_nz = row[row > 0.0]
+            if row_nz.size == 0:
+                continue
+            row_cutoff = float(np.quantile(row_nz, self.shift_quantile))
+            mask[s, :] = (row >= row_cutoff) & (row > 0.0)
+        np.fill_diagonal(mask, False)
 
         # ---- Build graph --------------------------------------------
         names = data.gene_names
         graph = nx.DiGraph()
         graph.add_nodes_from(range(G))
-        for s in range(G):
-            for t in range(G):
-                if s == t:
-                    continue
-                w = edge_weight[s, t]
-                if w >= cutoff and w > 0.0:
-                    graph.add_edge(s, t, weight=float(w))
+        src_idx, tgt_idx = np.nonzero(mask)
+        for s, t in zip(src_idx.tolist(), tgt_idx.tolist()):
+            graph.add_edge(s, t, weight=float(edge_weight[s, t]))
 
         # ---- Per-root Mann-Whitney |z| weighting --------------------
         root_conf = self._compute_root_confidence(
@@ -172,8 +193,6 @@ class DominatorTreeModel:
         )
 
         # ---- Dominator-tree votes (perturbed roots only) ------------
-        # Unperturbed roots have MW_z = 0 so their votes wouldn't count;
-        # skip the iteration entirely.
         score = np.zeros((G, G), dtype=np.float64)
         for g in perturbed_genes_sorted:
             root = data.gene_idx(g)
