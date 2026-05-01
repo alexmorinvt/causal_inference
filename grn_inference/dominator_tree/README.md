@@ -11,9 +11,9 @@ any alternative route.
 
 1. Build a directed graph `G_shift` whose edge weights are
    noise-normalised effect sizes:
-   `edge_weight[s, t] = |shift[s, t]| / pooled_std(t)`. Pooled std
+   `edge_weight[s, t] = |shift[s, t]| / pooled_std(s, t)`. Pooled std
    combines the do(s) and control variances of target gene t (Cohen's
-   d denominator). For unperturbed source rows, edges come from an
+   d denominator); it is per-arm, not global. For unperturbed source rows, edges come from an
    IV-regression proxy `β_iv[s, t] = ⟨s_s, s_t⟩ / ⟨s_s, s_s⟩`,
    rescaled to match the perturbed-row effect-size magnitude. Apply
    the `shift_quantile` threshold **per source row** (not globally),
@@ -92,26 +92,22 @@ High leverage (likely real wins)
   The score_mode parameter is gone; only the noise-normalised
   effect-size + edge_weight + MW-|z| pipeline remains.
 
-  3. Vectorise graph construction. Lines 219–225 are an O(G²) Python loop — 387K iterations on  
-  K562. Replace with:
-  mask = (edge_weight >= cutoff) & (edge_weight > 0)                                            
-  np.fill_diagonal(mask, False)                     
-  src, tgt = np.nonzero(mask)                                                                   
-  graph.add_weighted_edges_from(zip(src.tolist(), tgt.tolist(), edge_weight[src, tgt].tolist()))
-  NetworkX's immediate_dominators is the bottleneck anyway, but this still saves seconds × G    
-  roots.                                                                                        
-                                                                                                
-  Medium leverage (worth trying)                                                                
-                                                                                                
-  4. Per-source thresholding instead of global quantile. A global quantile lets strong-shift    
-  sources dominate the graph and silently zeros out weak-shift sources. Keep the top-k outgoing
-  edges per source (or a per-row quantile). Better balances cascade-router availability across  
-  roots and removes the IV-rescaling hack at lines 196–206.
+  ~~3. Vectorise graph construction.~~ — **resolved**. Graph construction now uses
+  `np.nonzero(mask)` (lines 186–188); the O(G²) per-cell loop is gone.
+  `add_weighted_edges_from` is a minor remaining speedup but NetworkX's
+  `immediate_dominators` is the bottleneck anyway.
 
-  5. Down-weight noisy edges in graph construction, not just votes. MW-|z| weights votes, but a 
-  weak root's outgoing edges still join the graph at full weight and shape other roots'
-  dominator trees as cascade routers. Multiply each row of edge_weight by root_conf[s] (with a  
-  floor) before thresholding so unreliable sources contribute fewer edges to the topology.
+  Medium leverage (worth trying)
+
+  ~~4. Per-source thresholding instead of global quantile.~~ — **resolved**. Per-source
+  quantile thresholding is the current default (lines 165–180). The IV-rescaling
+  hack was kept; per-source thresholding alone was sufficient to achieve the +14 pp
+  K562 STRING net gain.
+
+  ~~5. Down-weight noisy edges in graph construction, not just votes.~~ — **tested and
+  rejected**. Multiplying each row of edge_weight by `MW_z(s) / median(MW_z)` was
+  benchmarked and slightly compressed K562 wins from per-source thresholding (0.524
+  vs 0.556 at top_250) without compounding cleanly (see benchmark section above).
 
   6. Adaptive quantile by target out-degree. Pick cutoff to hit a target mean out-degree (3–5)  
   per perturbed source — robust across datasets without re-tuning. Already in README's Problem 2
@@ -138,6 +134,3 @@ High leverage (likely real wins)
   high if many roots have strong shift to v, regardless of how u relates to v. May explain why  
   it lifts STRING precision but still trails ShiftCorr — the score is closer to "v is downstream
    of many strong perturbations" than "u→v is direct."
-
-  Want me to dig into any of these (e.g., write a benchmark for #1 to confirm the toggle is     
-  dead, or implement #3 + #4)?

@@ -159,6 +159,8 @@ def make_synthetic_dataset(
     branching_factor: int = 2,
     perturbation_strength_range: tuple[float, float] = (0.3, 0.9),
     per_cell_alpha_spread: float = 0.0,
+    tf_fraction: float = 0.0,
+    tf_out_degree_alpha: float = 2.0,
     seed: int = 0,
 ) -> tuple[Dataset, SyntheticTruth]:
     """Generate a Dataset from a known linear cyclic SCM via a tree cascade.
@@ -254,6 +256,21 @@ def make_synthetic_dataset(
         reproduces the existing per-gene-only behaviour bit-identically.
         Enabling this switches the intervention simulator from the
         branching tree to independent per-cell cascades.
+    tf_fraction
+        Fraction of genes designated as transcription factors (TFs).
+        ``0.0`` (default) uses the original Erdős–Rényi construction.
+        When positive, only TF genes emit outgoing edges; non-TFs
+        have out-degree zero. TF out-degrees follow a Pareto
+        distribution (shape ``tf_out_degree_alpha``) with mean
+        ``edge_density * n_genes`` targets per TF. Note: the total
+        edge count is lower than the ER regime — scale-free graphs
+        are sparser overall, with edges concentrated in hubs.
+    tf_out_degree_alpha
+        Pareto shape parameter for TF out-degrees (used only when
+        ``tf_fraction > 0``). Lower values give a heavier tail — a
+        few TFs dominate with very high out-degree. Default 2.0 gives
+        moderate skew (finite variance); 1.5 gives infinite variance /
+        heavier hubs.
     seed
         RNG seed.
 
@@ -264,8 +281,39 @@ def make_synthetic_dataset(
     rng = np.random.default_rng(seed)
 
     # ---- Build W --------------------------------------------------------
-    mask = (rng.uniform(size=(n_genes, n_genes)) < edge_density).astype(float)
-    np.fill_diagonal(mask, 0.0)
+    if tf_fraction > 0.0:
+        # Scale-free: a small fraction of genes are TFs with Pareto-distributed
+        # out-degree; non-TFs emit no edges. Total edge count is matched to the
+        # ER regime via normalisation, so edge_density remains meaningful.
+        n_tf = max(1, round(tf_fraction * n_genes))
+        tf_idx = rng.choice(n_genes, size=n_tf, replace=False)
+        # edge_density sets mean TF out-degree as a fraction of n_genes;
+        # the Pareto gives the shape. This is independent of ER total-edge
+        # count — a scale-free graph is naturally sparser overall.
+        mean_out = max(1.0, edge_density * n_genes)
+        total_edges = max(n_tf, round(mean_out * n_tf))
+        raw = rng.pareto(tf_out_degree_alpha, size=n_tf) + 1.0
+        degrees = np.round(raw / raw.sum() * total_edges).astype(int)
+        degrees = np.clip(degrees, 1, n_genes - 1)
+        # Correct integer rounding so degrees sum exactly to total_edges.
+        diff = total_edges - int(degrees.sum())
+        if diff != 0:
+            hub = int(np.argmax(degrees))
+            degrees[hub] = int(np.clip(degrees[hub] + diff, 1, n_genes - 1))
+        mask = np.zeros((n_genes, n_genes), dtype=float)
+        all_genes = np.arange(n_genes)
+        for i, s in enumerate(tf_idx):
+            d = int(degrees[i])
+            if d == 0:
+                continue
+            candidates = all_genes[all_genes != s]
+            # mask[t, s] = 1 encodes s → t in the W[child, parent] convention
+            targets = rng.choice(candidates, size=min(d, len(candidates)), replace=False)
+            mask[targets, s] = 1.0
+    else:
+        mask = (rng.uniform(size=(n_genes, n_genes)) < edge_density).astype(float)
+        np.fill_diagonal(mask, 0.0)
+
     if forbid_two_cycles:
         # Where both (i,j) and (j,i) are 1, drop one at random.
         both = np.logical_and(mask, mask.T)

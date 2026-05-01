@@ -7,6 +7,8 @@ from .data_loaders import (
     make_synthetic_dataset,
 )
 from .dominator_tree import DominatorTreeModel
+from .dt_tr_ensemble import DTTREnsemble
+from .transitive_reduction import TransitiveReductionModel
 from .ensemble_scm import EnsembleSCMFitter
 from .evaluator import StatisticalResult, evaluate_statistical
 from .indirect_pruning import IndirectPruningModel
@@ -18,6 +20,8 @@ __all__ = [
     "CONTROL_LABEL",
     "Dataset",
     "DominatorTreeModel",
+    "DTTREnsemble",
+    "TransitiveReductionModel",
     "EnsembleSCMFitter",
     "FullyConnectedBaseline",
     "IndirectPruningModel",

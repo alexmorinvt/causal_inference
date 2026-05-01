@@ -35,11 +35,13 @@ from scipy.stats import wasserstein_distance
 
 from grn_inference import (
     DominatorTreeModel,
+    DTTREnsemble,
     EnsembleSCMFitter,
     IndirectPruningModel,
     MeanDifferenceModel,
     RandomBaseline,
     ShiftCorrModel,
+    TransitiveReductionModel,
     evaluate_statistical,
     make_synthetic_dataset,
 )
@@ -53,8 +55,14 @@ from grn_inference import (
 # that returns a fresh instance bound to ``top_k``.
 def build_methods(top_k: int, fit_seed: int = 0):
     return {
-        "MeanDifferenceModel": lambda: MeanDifferenceModel(top_k=top_k),
-        "RandomBaseline": lambda: RandomBaseline(top_k=top_k, seed=fit_seed),
+        "EnsembleSCMFitter":     lambda: EnsembleSCMFitter(top_k=top_k),
+        "DominatorTree":         lambda: DominatorTreeModel(top_k=top_k),
+        "TransitiveReduction":   lambda: TransitiveReductionModel(top_k=top_k),
+        "DTTREnsemble":          lambda: DTTREnsemble(top_k=top_k),
+        "IndirectPruning":       lambda: IndirectPruningModel(top_k=top_k),
+        "ShiftCorr":             lambda: ShiftCorrModel(top_k=top_k),
+        "Mean Difference":       lambda: MeanDifferenceModel(top_k=top_k),
+        "Random":                lambda: RandomBaseline(top_k=top_k, seed=fit_seed),
     }
 
 
@@ -98,7 +106,14 @@ def cumulative_mean_w1(
     return cum
 
 
-def run_one_seed(seed: int, *, headline_top_k: int = 1000) -> dict:
+def run_one_seed(
+    seed: int,
+    *,
+    headline_top_k: int = 1000,
+    edge_density: float = 0.12,
+    tf_fraction: float = 0.0,
+    tf_out_degree_alpha: float = 2.0,
+) -> dict:
     """Run every method once on the synthetic data at ``seed``.
 
     Returns a dict keyed by method name with headline metrics plus the
@@ -109,10 +124,12 @@ def run_one_seed(seed: int, *, headline_top_k: int = 1000) -> dict:
     n_perturbed_genes = n_genes // 2  # only half the genes get intervention arms
     data, truth = make_synthetic_dataset(
         n_genes=n_genes,
-        edge_density=0.12,
+        edge_density=edge_density,
         n_control_cells=2000,
         n_cells_per_perturbation=200,
         n_perturbed_genes=n_perturbed_genes,
+        tf_fraction=tf_fraction,
+        tf_out_degree_alpha=tf_out_degree_alpha,
         seed=seed,
     )
     perturbed_set = set(data.perturbed_genes())
@@ -158,40 +175,6 @@ def run_one_seed(seed: int, *, headline_top_k: int = 1000) -> dict:
         print(f"  {name:<22} {dt:>8.2f}s")
 
     oracle_edges = [e for e, _ in oracle[:max_k]]
-
-    t0 = time.time()
-    sc_edges = ShiftCorrModel(top_k=max_k).fit_predict(data)
-    print(f"  ShiftCorrModel:    {time.time() - t0:.2f}s")
-
-    t0 = time.time()
-    ip_edges = IndirectPruningModel(top_k=max_k).fit_predict(data)
-    print(f"  IndirectPruning:   {time.time() - t0:.2f}s")
-
-    t0 = time.time()
-    dt_edges = DominatorTreeModel(top_k=max_k).fit_predict(data)
-    print(f"  DominatorTree:     {time.time() - t0:.2f}s")
-
-    t0 = time.time()
-    fit_edges = EnsembleSCMFitter(top_k=max_k).fit_predict(data)
-    print(f"  EnsembleSCMFitter:     {time.time() - t0:.2f}s")
-
-    t0 = time.time()
-    md_edges = MeanDifferenceModel(top_k=max_k).fit_predict(data)
-    print(f"  MeanDifferenceModel:     {time.time() - t0:.2f}s")
-
-    t0 = time.time()
-    rb_edges = RandomBaseline(top_k=max_k).fit_predict(data)
-    print(f"  RandomBaseline:     {time.time() - t0:.2f}s")
-
-    methods = {
-        "Oracle (W1 sorted)": oracle_edges,
-        "EnsembleSCMFitter":  fit_edges,
-        "DominatorTree":      dt_edges,
-        "IndirectPruning":    ip_edges,
-        "ShiftCorr":          sc_edges,
-        "Mean Difference":    md_edges,
-        "Random":             rb_edges,
-    }
 
     # Display order: oracle diagnostic first, then in-tree methods.
     display_methods = {
@@ -338,11 +321,29 @@ def main() -> None:
         "--top-k", type=int, default=1000,
         help="Headline top_k for the JSON summary (default: 1000).",
     )
+    parser.add_argument(
+        "--edge-density", type=float, default=0.12,
+        help="Edge density / mean TF out-degree fraction (default: 0.12).",
+    )
+    parser.add_argument(
+        "--tf-fraction", type=float, default=0.0,
+        help="Fraction of genes that are TFs (0 = Erdős–Rényi, default).",
+    )
+    parser.add_argument(
+        "--tf-out-degree-alpha", type=float, default=2.0,
+        help="Pareto shape for TF out-degree (lower = heavier tail, default: 2.0).",
+    )
     args = parser.parse_args()
 
     per_seed: dict[int, dict] = {}
     for seed in args.seeds:
-        per_seed[seed] = run_one_seed(seed, headline_top_k=args.top_k)
+        per_seed[seed] = run_one_seed(
+            seed,
+            headline_top_k=args.top_k,
+            edge_density=args.edge_density,
+            tf_fraction=args.tf_fraction,
+            tf_out_degree_alpha=args.tf_out_degree_alpha,
+        )
 
     # --------------------------------------------------------------------
     # Cross-seed aggregate: for each in-tree method, print seed-means at
