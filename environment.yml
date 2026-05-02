@@ -17,6 +17,11 @@ dependencies:
   - pytorch
   - cpuonly
 
+  # --- CausalBench real-data dependencies ---
+  - scanpy
+  - openpyxl
+  - gdown
+
   # --- Dev tools ---
   - pytest>=7.0
   - pytest-cov
@@ -31,17 +36,11 @@ dependencies:
       # Install this project itself in editable mode so `import grn_inference`
       # works. Run this from inside the repo after `conda env create`.
       - -e .
+      - -e vendor/causalbench --no-deps
 
 # -------------------------------------------------------------------------
 # GPU later: replace `pytorch cpuonly` with `pytorch pytorch-cuda=12.1` and
 # add the `nvidia` channel. The pytorch install selector at
 # https://pytorch.org/get-started/locally/ generates the exact command for
 # your platform.
-#
-# Adding CausalBench (real data) later:
-#
-#   conda run -n grn-inference pip install causalbench
-#
-# causalbench is PyPI-only, no conda recipe exists — so it goes through pip
-# inside the conda env.
 # -------------------------------------------------------------------------
